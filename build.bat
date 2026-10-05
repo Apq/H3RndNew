@@ -12,5 +12,12 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+rem 可选 RNG 审计独立测试（不启动游戏）：set H3RND_RUN_AUDIT_TESTS=1
+if "%H3RND_RUN_AUDIT_TESTS%"=="1" (
+    call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\MSBuild.exe" tests\random_audit_test.vcxproj /p:Configuration=Release /p:Platform=Win32 /m /t:Rebuild
+    if errorlevel 1 exit /b 1
+    Release\tests\random_audit_test.exe
+    if errorlevel 1 exit /b 1
+)
 pwsh -c "Write-Host '编译完成' -ForegroundColor Green"
 if "%PAUSE_ON_SUCCESS%"=="1" pause

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations"><ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration></ItemGroup>
+  <PropertyGroup Label="Globals"><ProjectGuid>{7A16CDA6-B0BD-41A2-83DD-EAD3CA4096C0}</ProjectGuid><WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration"><ConfigurationType>Application</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries><PlatformToolset>v145</PlatformToolset></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup><OutDir>$(ProjectDir)..\Release\tests\</OutDir><IntDir>$(OutDir)obj\</IntDir></PropertyGroup>
+  <ItemDefinitionGroup><ClCompile><LanguageStandard>stdcpp20</LanguageStandard><WarningLevel>Level3</WarningLevel><StructMemberAlignment>1Byte</StructMemberAlignment><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions><PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WINDOWS_IGNORE_PACKING_MISMATCH;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile><Link><SubSystem>Console</SubSystem></Link></ItemDefinitionGroup>
+  <ItemGroup><ClCompile Include="random_audit_test.cpp" /></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

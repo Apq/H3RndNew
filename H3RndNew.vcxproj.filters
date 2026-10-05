@@ -20,6 +20,7 @@
     <ClCompile Include="modules\Entry.inc.cpp" />
     <ClCompile Include="modules\SettingsDialog.inc.cpp" />
     <ClCompile Include="modules\TrueRandom.inc.cpp" />
+    <ClInclude Include="modules\RandomAudit.inc.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />

@@ -38,16 +38,19 @@ static void CountFullReplacedRoll_()
 {
     const LONG n = InterlockedIncrement(&g_full_replaced_calls_);
     if ((n & 0x3FFFF) == 0) // 每 26 万次一条，避免刷屏
-        LogInfo("真随机: 全局模式已累计替换 %d 次（含窗口外）",
+        LogInfo("真随机: 窗口外替换分段累计 %d 次",
             static_cast<int>(n));
 }
 
-// 每替换 65536 次留一条进度日志：崩溃时最后一行进度就是崩前的量级。
+// 完整入口审计定义在 RandomAudit.inc.cpp；必须在安装 RNG Hook 前初始化。
+
+// 保留旧替换进度；完整入口心跳由 EndRandomAudit_ 独立驱动，原版路径也有汇总。
 static void CountReplacedRoll_()
 {
     const LONG n = InterlockedIncrement(&g_replaced_count_);
-    if ((n & 0xFFFF) == 0)
+    if ((n & 0xFFFF) == 0) {
         LogInfo("真随机: 已替换 %d 次", static_cast<int>(n));
+    }
 }
 
 static void PersistTrueRandom_()
@@ -254,46 +257,70 @@ static void __stdcall OnScenarioCtor_(HiHook* hook,
 // 是否处于替换态：全局模式全程替换（含开局窗口内）；否则仅开局窗口内
 // 且开局勾选打开。探针计数只在「既不替换、又在窗口外」时进行，全局模式
 // 下窗口外调用是被替换的对象，不再计入探针。
-static bool InReplaceMode_()
+static bool InReplaceMode_(bool full)
 {
-    return g_true_random_full != 0
-        || (g_true_random != 0 && g_in_new_game_ != 0);
+    return full || (g_true_random != 0 && g_in_new_game_ != 0);
 }
 
-// 游戏 Rand(lo, hi)。两端无区间时原函数不取数，这里也不取。
+// 游戏 Rand(lo, hi)。入口捕获开关；每条返回/SEH 异常路径均由 finally 完成审计。
 static int __stdcall OnGameRand_(HiHook* hook, int lo, int hi)
 {
-    if (InReplaceMode_() && hi > lo) {
-        const int span = hi - lo + 1;
-        const int roll = NextTrue15_();
-        if (roll >= 0) {
-            CountReplacedRoll_();
-            if (!g_in_new_game_)
-                CountFullReplacedRoll_(); // 窗口外的替换：全局生效证据
-            return roll % span + lo;
+    const bool full = g_true_random_full != 0;
+    const bool replace = InReplaceMode_(full);
+    RandomAuditOutcome_ outcome = kAuditAborted_;
+    BeginRandomAudit_(0, full);
+    __try {
+        if (hi <= lo) {
+            const int result = FASTCALL_2(int, hook->GetDefaultFunc(), lo, hi);
+            outcome = kAuditNoDraw_;
+            return result;
         }
-    } else if (!InReplaceMode_() && !g_in_new_game_) {
-        // 只统计真正的窗口外调用；窗口内失败回退不算。
-        InterlockedIncrement(&g_outside_rand_calls_);
+        if (replace) {
+            const int roll = NextTrue15_();
+            if (roll >= 0) {
+                CountReplacedRoll_();
+                if (!g_in_new_game_) CountFullReplacedRoll_();
+                outcome = kAuditTrue_;
+                return roll % (hi - lo + 1) + lo;
+            }
+        } else if (!g_in_new_game_) {
+            InterlockedIncrement(&g_outside_rand_calls_);
+        }
+        const int result = FASTCALL_2(int, hook->GetDefaultFunc(), lo, hi);
+        outcome = replace ? kAuditFallback_ : kAuditOriginal_;
+        return result;
     }
-    return FASTCALL_2(int, hook->GetDefaultFunc(), lo, hi);
+    __finally {
+        EndRandomAudit_(0, full, outcome);
+    }
 }
 
-// 随机图生成器直接调的 CRT _rand，返回值同样是 0..0x7FFF。
+// CRT _rand，返回 0..0x7FFF。与 Rand 入口分开计数，不将嵌套调用当两次独立取数。
 static int __stdcall OnCrtRand_(HiHook* hook)
 {
-    if (InReplaceMode_()) {
-        const int roll = NextTrue15_();
-        if (roll >= 0) {
-            CountReplacedRoll_();
-            if (!g_in_new_game_)
-                CountFullReplacedRoll_();
-            return roll;
+    const bool full = g_true_random_full != 0;
+    const bool replace = InReplaceMode_(full);
+    RandomAuditOutcome_ outcome = kAuditAborted_;
+    BeginRandomAudit_(1, full);
+    __try {
+        if (replace) {
+            const int roll = NextTrue15_();
+            if (roll >= 0) {
+                CountReplacedRoll_();
+                if (!g_in_new_game_) CountFullReplacedRoll_();
+                outcome = kAuditTrue_;
+                return roll;
+            }
+        } else if (!g_in_new_game_) {
+            InterlockedIncrement(&g_outside_crt_calls_);
         }
-    } else if (!InReplaceMode_() && !g_in_new_game_) {
-        InterlockedIncrement(&g_outside_crt_calls_);
+        const int result = CDECL_0(int, hook->GetDefaultFunc());
+        outcome = replace ? kAuditFallback_ : kAuditOriginal_;
+        return result;
     }
-    return CDECL_0(int, hook->GetDefaultFunc());
+    __finally {
+        EndRandomAudit_(1, full, outcome);
+    }
 }
 
 static int __stdcall OnStartGame_(HiHook* hook, int self)
@@ -303,14 +330,15 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
     const LONG outside_rand = InterlockedExchange(&g_outside_rand_calls_, 0);
     const LONG outside_crt = InterlockedExchange(&g_outside_crt_calls_, 0);
     if (g_true_random_full)
-        LogInfo("真随机: 全局模式运行中，上一局窗口外替换 %d 次、"
-            "原版放行 0 次（探针 Rand=%d _rand=%d 为全局替换所致）",
+        LogInfo("真随机: 全局模式运行中，窗口外替换累计 %d 次；"
+            "窗口外探针原版 Rand=%d _rand=%d",
             static_cast<int>(InterlockedExchange(&g_full_replaced_calls_, 0)),
             static_cast<int>(outside_rand),
             static_cast<int>(outside_crt));
     else
-        LogInfo("真随机: 上一窗口外 Rand 调用 %d 次、_rand 调用 %d 次，均走原版",
+        LogInfo("真随机: 上一窗口外探针 Rand=%d _rand=%d（均为原版）",
             static_cast<int>(outside_rand), static_cast<int>(outside_crt));
+    LogRandomAudit_("开始前");
     // 若上次异常退出没归零，这里强制重置并留痕，防止泄漏殃及战斗取数。
     const LONG leaked = InterlockedExchange(&g_in_new_game_, 1);
     if (leaked != 0)
@@ -330,6 +358,7 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
     }
     LogInfo("真随机: 开局取数窗口结束，共替换 %d 次",
         static_cast<int>(g_replaced_count_));
+    LogRandomAudit_("开局结束");
     return result;
 }
 
@@ -346,5 +375,7 @@ static void InstallTrueRandomHooks_()
         reinterpret_cast<void*>(&OnGameRand_));
     _PI->WriteHiHook(kCrtRand_, SPLICE_, EXTENDED_, CDECL_,
         reinterpret_cast<void*>(&OnCrtRand_));
-    LogInfo("真随机: Hook 已安装");
+    LogInfo("真随机: Hook 已安装；RNG审计 v2，统计 Rand/_rand 每次入口及结果，"
+        "全局期间单列，不覆盖绕过入口的其它模块私有 RNG；原版路径不保证 HD Hook 链的内部算法");
+    LogRandomAudit_("审计启动");
 }

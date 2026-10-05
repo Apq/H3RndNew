@@ -38,6 +38,7 @@ static void LogSelfVersion_()
 
 static void StartPlugin()
 {
+    InitRandomAudit_();
     LogSelfVersion_();
     LogInfo("真随机: plugin enabled. TrueRandom=%d Full=%d Hotkey=%d"
         "（0=伪随机 1=真随机；Full=全局；Hotkey=设置键扫描码）",
