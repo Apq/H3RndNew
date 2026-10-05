@@ -78,18 +78,31 @@ static void PersistHotkey_()
 // ---- 设置窗 ----
 
 static const int kSdTitleId_     = 0x7E10;
-static const int kSdCheckId_     = 0x7E11; // ChkBlue.def 勾选框
-static const int kSdCheckHitId_  = 0x7E12; // 标签透明点击区
+static const int kSdCheckId_     = 0x7E11; // sysopchk 开关
+static const int kSdCheckHitId_  = 0x7E12; // 标签点击区（文字控件兼任）
 static const int kSdKeyHintId_   = 0x7E13; // 热键行「热键：」文字
-static const int kSdKeyNameId_   = 0x7E15; // 键名（文字+框一体的原生控件）
+static const int kSdKeyNameId_   = 0x7E15; // 键名文字（SinkArea 下沉框内）
 static const int kSdOkId_        = 0x7E16;
+static const int kSdLogLabelId_  = 0x7E18; // 「日志等级：」文字
+static const int kSdLogDdId_     = 0x7E19; // 日志等级下拉框收起态
+static const int kSdLogItem0Id_  = 0x7E20; // 展开列表项 0..4（五级）
 static const int kSdW_ = 340;
-static const int kSdH_ = 190;
+static const int kSdH_ = 240;
+
+// 日志等级下拉：布局常量（收起框 / 展开列表 / 三角箭头）。
+static const int kSdLogRow_     = 136;   // 行 y（标签与收起框）
+static const int kSdLogDdX_     = 120;   // 收起框 x（与键名框对齐）
+static const int kSdLogDdW_     = 100;
+static const int kSdLogDdH_     = 24;
+static const int kSdLogItemH_   = 20;    // 展开列表单行高
+static const int kSdLogLevelCount_ = 5;  // trace/debug/info/warn/error
 
 struct SettingsDlg_ final : public H3Dlg
 {
-    H3DlgDefButton* check_box_ = nullptr;
-    H3DlgText*      key_name_  = nullptr;
+    H3DlgDefButton* check_box_   = nullptr;
+    H3DlgText*      key_name_    = nullptr;
+    H3DlgText*      log_dd_text_ = nullptr;  // 收起态当前等级名
+    bool            log_dd_open_ = false;    // 下拉展开态
 
     SettingsDlg_() : H3Dlg(kSdW_, kSdH_) {}
 
@@ -159,11 +172,95 @@ struct SettingsDlg_ final : public H3Dlg
         if (H3LoadedPcx16* bg = GetBackgroundPcx())
             bg->SinkArea(118, 92, 70, 30);
 
+        // 日志等级行：标签 + 自绘下拉框（H3Auto 帮助界面同款交互：
+        // 点框展开、点选生效、点外部收起）。当前等级名也由框架绘制。
+        H3DlgText* log_label = H3DlgText::Create(60, kSdLogRow_, 52, 24,
+            Utf8ToGbk_("日志：", gbk, sizeof(gbk)) ? gbk : "",
+            "smalfont.fnt", 5, kSdLogLabelId_, 4, 0);
+        if (log_label) {
+            char lv_hint_gbk[160];
+            const bool lv_hint_ok = Utf8ToGbk_(
+                "低于该等级的日志不写盘；修改立即生效并保存到 user.ini",
+                lv_hint_gbk, sizeof(lv_hint_gbk)) != 0;
+            if (lv_hint_ok) log_label->SetHint(lv_hint_gbk);
+            AddItem(log_label);
+        }
+        log_dd_text_ = H3DlgText::Create(kSdLogDdX_, kSdLogRow_,
+            kSdLogDdW_, kSdLogDdH_, "",
+            "smalfont.fnt", 5, kSdLogDdId_, 5, 0);
+        if (log_dd_text_) {
+            char lv_hint_gbk[160];
+            const bool lv_hint_ok = Utf8ToGbk_(
+                "点击展开日志等级选项",
+                lv_hint_gbk, sizeof(lv_hint_gbk)) != 0;
+            if (lv_hint_ok) log_dd_text_->SetHint(lv_hint_gbk);
+            AddItem(log_dd_text_);
+            // 收起框下沉边框（与键名框同款）。
+            if (H3LoadedPcx16* bg = GetBackgroundPcx())
+                bg->SinkArea(kSdLogDdX_ - 2, kSdLogRow_ - 2,
+                    kSdLogDdW_ + 4, kSdLogDdH_ + 4);
+            UpdateLogLevelText_();
+        }
+        // 展开列表项：默认隐藏，展开时 Show、收起时 Hide（框架绘制，
+        // 不碰背景纹理）。y 排在收起框下方。
+        for (int i = 0; i < kSdLogLevelCount_; ++i) {
+            char gbk[64];
+            if (!Utf8ToGbk_(LogLevelDisplayName_(i), gbk, sizeof(gbk)))
+                continue;
+            H3DlgText* item = H3DlgText::Create(kSdLogDdX_,
+                kSdLogRow_ + kSdLogDdH_ + 2 + i * kSdLogItemH_,
+                kSdLogDdW_, kSdLogItemH_, gbk,
+                "smalfont.fnt", 5, kSdLogItem0Id_ + i, 4, 0);
+            if (item) {
+                item->HideDeactivate();
+                AddItem(item);
+            }
+        }
+
         // 确定按钮：closeDialog=TRUE，点击自动关窗；Enter 等效。
-        H3DlgDefButton* ok = H3DlgDefButton::Create(138, 140, kSdOkId_,
+        // 窗口加高到 240 后按钮下移到日志行下方。
+        H3DlgDefButton* ok = H3DlgDefButton::Create(138, 200, kSdOkId_,
             "iokay.def", 0, 1, TRUE, NH3VKey::H3VK_ENTER);
         if (ok) AddItem(ok);
         return TRUE;
+    }
+
+    // 日志等级名（中文显示名，UI 层；INI 仍写 trace/debug/…）。
+    static const char* LogLevelDisplayName_(int level)
+    {
+        switch (level) {
+        case LOG_TRACE: return "全部(trace)";
+        case LOG_DEBUG: return "调试(debug)";
+        case LOG_INFO:  return "信息(info)";
+        case LOG_WARN:  return "警告(warn)";
+        default:        return "错误(error)";
+        }
+    }
+
+    void UpdateLogLevelText_()
+    {
+        if (!log_dd_text_) return;
+        char gbk[64];
+        if (!Utf8ToGbk_(LogLevelDisplayName_(g_log_level), gbk, sizeof(gbk)))
+            return;
+        log_dd_text_->SetText(gbk);
+    }
+
+    // 展开/收起：选项是常驻但默认隐藏的文字控件，交给框架绘制，
+    // 不在背景纹理上留任何痕迹（背景是常驻图，画上去就擦不掉）。
+    void SetLogDropdownOpen_(bool open)
+    {
+        log_dd_open_ = open;
+        for (int i = 0; i < kSdLogLevelCount_; ++i) {
+            H3DlgText* item = GetText(
+                static_cast<UINT16>(kSdLogItem0Id_ + i));
+            if (!item) continue;
+            if (open)
+                item->ShowActivate();
+            else
+                item->HideDeactivate();
+        }
+        Redraw();
     }
 
     BOOL OnLeftClick(INT itemId, H3Msg& msg) override
@@ -189,6 +286,31 @@ struct SettingsDlg_ final : public H3Dlg
             InterlockedExchange(&s_listen_new_hotkey_, 1);
             RefreshKeyName_();
             LogInfo("真随机: 等待输入新热键");
+            return TRUE;
+        }
+        // 日志等级下拉框：点收起框切换展开/收起；点列表项选择并收起。
+        if (itemId == kSdLogDdId_) {
+            SetLogDropdownOpen_(!log_dd_open_);
+            return TRUE;
+        }
+        if (itemId >= kSdLogItem0Id_
+            && itemId < kSdLogItem0Id_ + kSdLogLevelCount_) {
+            const int level = itemId - kSdLogItem0Id_;
+            g_log_level = level;
+            char value[16];
+            _snprintf(value, sizeof(value) - 1, "%s",
+                LogLevelName_(level));
+            if (!IniWriteKeyUtf8(g_user_ini_path, "Logging", "MinLevel",
+                    value))
+                LogError("真随机: 写入 user.ini(MinLevel) 失败");
+            UpdateLogLevelText_();
+            SetLogDropdownOpen_(false);
+            LogInfo("真随机: 日志等级切换为 %s", value);
+            return TRUE;
+        }
+        // 点到其它任何控件：若下拉已展开，先收起（点外部收起）。
+        if (log_dd_open_) {
+            SetLogDropdownOpen_(false);
             return TRUE;
         }
         return FALSE; // OK 按钮由 closeDialog 默认逻辑关窗
