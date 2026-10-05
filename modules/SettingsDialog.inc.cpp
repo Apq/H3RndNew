@@ -109,7 +109,7 @@ struct SettingsDlg_ final : public H3Dlg
         char hint_gbk[160];
         const bool hint_ok = Utf8ToGbk_(kFullHint_, hint_gbk,
             sizeof(hint_gbk)) != 0;
-        check_box_ = H3DlgDefButton::Create(60, 50, kSdCheckId_,
+        check_box_ = H3DlgDefButton::Create(60, 52, kSdCheckId_,
             NH3Dlg::Assets::ON_OFF_CHECKBOX, g_true_random_full ? 1 : 0,
             1 - (g_true_random_full ? 1 : 0), FALSE, 0);
         if (check_box_) {
@@ -172,9 +172,18 @@ struct SettingsDlg_ final : public H3Dlg
         if (itemId == kSdCheckId_ || itemId == kSdCheckHitId_) {
             g_true_random_full = g_true_random_full ? 0 : 1;
             PersistTrueRandomFull_();
+            // DefButton 的 clickFrame 只是“按住期间”的显示帧，松开仍回
+            // defFrame；开关状态必须在点击后写回 defFrame 才会保持。
+            if (check_box_) {
+                const int frame = g_true_random_full ? 1 : 0;
+                check_box_->SetFrame(frame);
+                check_box_->SetClickFrame(1 - frame);
+                check_box_->Draw();
+                check_box_->ParentRedraw();
+            }
             LogInfo("真随机: 全局模式切换为 %d（%s）", g_true_random_full,
                 g_true_random_full ? "全程系统级随机" : "仅开局窗口");
-            return TRUE; // 开关由 H3DlgDefButton 自动翻转显示
+            return TRUE;
         }
         if (itemId == kSdKeyNameId_) {
             InterlockedExchange(&s_listen_new_hotkey_, 1);
