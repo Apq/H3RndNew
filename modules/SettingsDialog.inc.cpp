@@ -84,6 +84,7 @@ static const int kSdKeyHintId_   = 0x7E13; // 热键行「热键：」文字
 static const int kSdKeyHitId_    = 0x7E14; // 键名透明点击区
 static const int kSdKeyNameId_   = 0x7E15; // 键名文字
 static const int kSdOkId_        = 0x7E16;
+static const int kSdKeyFrameId_  = 0x7E17; // 键名可见框（Box66x32.pcx）
 static const int kSdW_ = 340;
 static const int kSdH_ = 190;
 
@@ -97,9 +98,9 @@ struct SettingsDlg_ final : public H3Dlg
     BOOL OnCreate() override
     {
         char gbk[160];
-        H3DlgText* title = H3DlgText::Create(70, 12, 200, 24,
+        H3DlgText* title = H3DlgText::Create(0, 12, kSdW_, 24,
             Utf8ToGbk_("真随机 设置", gbk, sizeof(gbk)) ? gbk : "",
-            "smalfont.fnt", 1, kSdTitleId_, 4, 0);
+            "smalfont.fnt", 1, kSdTitleId_, 5, 0);
         if (title) AddItem(title);
 
         // 全局真随机：ChkBlue 勾选框 + 可点标签（与开局勾选同款素材）。
@@ -125,30 +126,33 @@ struct SettingsDlg_ final : public H3Dlg
             AddItem(full_label);
         }
 
-        // 热键行：说明文字 + 键名（点键名进入修改）。
-        H3DlgText* key_label = H3DlgText::Create(60, 96, 60, 24,
+        // 热键行：说明文字 + 带可见边框的键名框（Box66x32.pcx）。
+        H3DlgText* key_label = H3DlgText::Create(60, 96, 52, 24,
             Utf8ToGbk_("热键：", gbk, sizeof(gbk)) ? gbk : "",
             "smalfont.fnt", 5, kSdKeyHintId_, 4, 0);
         if (key_label) {
             char key_hint_gbk[160];
             const bool key_hint_ok = Utf8ToGbk_(
-                "点击后按新键（ESC 取消）；F12 已被 SoD_SP 设置占用",
+                "点击框内后按新键（ESC 取消）；F12 已被 SoD_SP 设置占用",
                 key_hint_gbk, sizeof(key_hint_gbk)) != 0;
             if (key_hint_ok) key_label->SetHint(key_hint_gbk);
             AddItem(key_label);
         }
+        H3DlgPcx* key_frame = H3DlgPcx::Create(120, 92, kSdKeyFrameId_,
+            NH3Dlg::Assets::BOX_66_32_PCX);
+        if (key_frame) AddItem(key_frame);
         H3DlgTransparentItem* key_hit = H3DlgTransparentItem::Create(
-            120, 92, 110, 32, kSdKeyHitId_);
+            120, 92, 66, 32, kSdKeyHitId_);
         if (key_hit) {
             char key_hint_gbk[160];
             const bool key_hint_ok = Utf8ToGbk_(
-                "点击后按新键（ESC 取消）；F12 已被 SoD_SP 设置占用",
+                "点击框内后按新键（ESC 取消）；F12 已被 SoD_SP 设置占用",
                 key_hint_gbk, sizeof(key_hint_gbk)) != 0;
             if (key_hint_ok) key_hit->SetHint(key_hint_gbk);
             AddItem(key_hit);
         }
-        key_name_ = H3DlgText::Create(124, 96, 102, 24, "",
-            "smalfont.fnt", 5, kSdKeyNameId_, 4, 0);
+        key_name_ = H3DlgText::Create(120, 96, 66, 24, "",
+            "smalfont.fnt", 5, kSdKeyNameId_, 5, 0);
         if (key_name_) AddItem(key_name_);
         RefreshKeyName_();
 
@@ -217,6 +221,11 @@ static void RunSettingsDialog_()
     SettingsDlg_ dlg;
     s_active_dlg_ = &dlg;
     dlg.Start(); // 模态，返回即关窗
+    // 键名文字在侦听期间通过 Draw+Refresh 直接更新过屏幕；
+    // 关闭后主动让窗口矩形交底层重绘，避免静止场景留下动态文字残影。
+    if (H3WindowManager* wm = H3WindowManager::Get())
+        wm->H3Redraw(dlg.GetX(), dlg.GetY(), dlg.GetWidth(), dlg.GetHeight());
+    InterlockedExchange(&s_listen_new_hotkey_, 0);
     s_active_dlg_ = nullptr;
 }
 
