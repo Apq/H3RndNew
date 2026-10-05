@@ -88,8 +88,8 @@ static const int kSdH_ = 190;
 
 struct SettingsDlg_ final : public H3Dlg
 {
-    H3DlgDef*  check_box_ = nullptr;
-    H3DlgText* key_name_  = nullptr;
+    H3DlgDefButton* check_box_ = nullptr;
+    H3DlgText*      key_name_  = nullptr;
 
     SettingsDlg_() : H3Dlg(kSdW_, kSdH_) {}
 
@@ -101,15 +101,17 @@ struct SettingsDlg_ final : public H3Dlg
             "smalfont.fnt", 1, kSdTitleId_, 5, 0);
         if (title) AddItem(title);
 
-        // 全局真随机：ChkBlue 勾选框 + 可点标签（与开局勾选同款素材）。
+        // 全局真随机：系统选项同款开关复选框（sysopchk.def，金色系）
+        // + 可点标签。frame 0=关 1=开，点击自动翻转，不用手工重绘。
         static const char kFullHint_[] =
             "开启后游戏全程随机数改用系统级随机；"
             "关闭时仅新游戏建档期间替换";
         char hint_gbk[160];
         const bool hint_ok = Utf8ToGbk_(kFullHint_, hint_gbk,
             sizeof(hint_gbk)) != 0;
-        check_box_ = H3DlgDef::Create(60, 52, 32, 24, kSdCheckId_,
-            "ChkBlue.def", g_true_random_full ? 1 : 0, 0, FALSE, FALSE);
+        check_box_ = H3DlgDefButton::Create(60, 50, kSdCheckId_,
+            NH3Dlg::Assets::ON_OFF_CHECKBOX, g_true_random_full ? 1 : 0,
+            1 - (g_true_random_full ? 1 : 0), FALSE, 0);
         if (check_box_) {
             if (hint_ok) check_box_->SetHint(hint_gbk);
             AddItem(check_box_);
@@ -170,14 +172,9 @@ struct SettingsDlg_ final : public H3Dlg
         if (itemId == kSdCheckId_ || itemId == kSdCheckHitId_) {
             g_true_random_full = g_true_random_full ? 0 : 1;
             PersistTrueRandomFull_();
-            if (check_box_) {
-                check_box_->SetFrame(g_true_random_full ? 1 : 0);
-                check_box_->Draw();
-                check_box_->ParentRedraw();
-            }
             LogInfo("真随机: 全局模式切换为 %d（%s）", g_true_random_full,
                 g_true_random_full ? "全程系统级随机" : "仅开局窗口");
-            return TRUE;
+            return TRUE; // 开关由 H3DlgDefButton 自动翻转显示
         }
         if (itemId == kSdKeyNameId_) {
             InterlockedExchange(&s_listen_new_hotkey_, 1);
