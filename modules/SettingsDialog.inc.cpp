@@ -81,18 +81,15 @@ static const int kSdTitleId_     = 0x7E10;
 static const int kSdCheckId_     = 0x7E11; // ChkBlue.def 勾选框
 static const int kSdCheckHitId_  = 0x7E12; // 标签透明点击区
 static const int kSdKeyHintId_   = 0x7E13; // 热键行「热键：」文字
-static const int kSdKeyHitId_    = 0x7E14; // 键名透明点击区
-static const int kSdKeyNameId_   = 0x7E15; // 键名文字
+static const int kSdKeyNameId_   = 0x7E15; // 键名（文字+框一体的原生控件）
 static const int kSdOkId_        = 0x7E16;
-static const int kSdKeyFrameId_  = 0x7E17; // 键名可见框（Box66x32.pcx）
 static const int kSdW_ = 340;
 static const int kSdH_ = 190;
 
 struct SettingsDlg_ final : public H3Dlg
 {
-    H3DlgDef*  check_box_ = nullptr;
-    H3DlgPcx*  key_frame_ = nullptr;
-    H3DlgText* key_name_  = nullptr;
+    H3DlgDef*      check_box_ = nullptr;
+    H3DlgTextPcx*  key_name_  = nullptr;
 
     SettingsDlg_() : H3Dlg(kSdW_, kSdH_) {}
 
@@ -127,7 +124,7 @@ struct SettingsDlg_ final : public H3Dlg
             AddItem(full_label);
         }
 
-        // 热键行：说明文字 + 带可见边框的键名框（Box66x32.pcx）。
+        // 热键行：说明文字 + 原生文字/PCX 组合控件。
         H3DlgText* key_label = H3DlgText::Create(60, 96, 52, 24,
             Utf8ToGbk_("热键：", gbk, sizeof(gbk)) ? gbk : "",
             "smalfont.fnt", 5, kSdKeyHintId_, 4, 0);
@@ -139,23 +136,23 @@ struct SettingsDlg_ final : public H3Dlg
             if (key_hint_ok) key_label->SetHint(key_hint_gbk);
             AddItem(key_label);
         }
-        key_frame_ = H3DlgPcx::Create(120, 92, kSdKeyFrameId_,
-            NH3Dlg::Assets::BOX_66_32_PCX);
-        if (key_frame_) AddItem(key_frame_);
-        H3DlgTransparentItem* key_hit = H3DlgTransparentItem::Create(
-            120, 92, 66, 32, kSdKeyHitId_);
-        if (key_hit) {
+        // OnCreate 在 vShow 保存底层画面之前运行，这里只设置文字，绝不绘制。
+        char initial_key_gbk[64] = {};
+        char initial_key_utf8[64];
+        ScanToName_(g_settings_hotkey_scan, initial_key_utf8,
+            sizeof(initial_key_utf8));
+        Utf8ToGbk_(initial_key_utf8, initial_key_gbk, sizeof(initial_key_gbk));
+        key_name_ = H3DlgTextPcx::Create(120, 92, 66, 32, initial_key_gbk,
+            "smalfont.fnt", NH3Dlg::Assets::BOX_66_32_PCX, 5,
+            kSdKeyNameId_, 5);
+        if (key_name_) {
             char key_hint_gbk[160];
             const bool key_hint_ok = Utf8ToGbk_(
                 "点击框内后按新键（ESC 取消）；F12 已被 SoD_SP 设置占用",
                 key_hint_gbk, sizeof(key_hint_gbk)) != 0;
-            if (key_hint_ok) key_hit->SetHint(key_hint_gbk);
-            AddItem(key_hit);
+            if (key_hint_ok) key_name_->SetHint(key_hint_gbk);
+            AddItem(key_name_);
         }
-        key_name_ = H3DlgText::Create(120, 96, 66, 24, "",
-            "smalfont.fnt", 5, kSdKeyNameId_, 5, 0);
-        if (key_name_) AddItem(key_name_);
-        RefreshKeyName_();
 
         // 确定按钮：closeDialog=TRUE，点击自动关窗；Enter 等效。
         H3DlgDefButton* ok = H3DlgDefButton::Create(138, 140, kSdOkId_,
@@ -179,7 +176,7 @@ struct SettingsDlg_ final : public H3Dlg
                 g_true_random_full ? "全程系统级随机" : "仅开局窗口");
             return TRUE;
         }
-        if (itemId == kSdKeyHitId_ || itemId == kSdKeyNameId_) {
+        if (itemId == kSdKeyNameId_) {
             InterlockedExchange(&s_listen_new_hotkey_, 1);
             RefreshKeyName_();
             LogInfo("真随机: 等待输入新热键");
@@ -188,21 +185,9 @@ struct SettingsDlg_ final : public H3Dlg
         return FALSE; // OK 按钮由 closeDialog 默认逻辑关窗
     }
 
-    // 先隐藏动态文字，再重画键名框背景；否则 SetText 后 Draw 会把
-    // 新字符串直接叠到旧字符串上。提示文字由对话框框架绘制，不走此路径。
-    void ClearKeyName_()
-    {
-        if (key_name_)
-            key_name_->Hide();
-        if (key_frame_) {
-            key_frame_->Show();
-            key_frame_->Draw();
-            key_frame_->Refresh();
-        }
-    }
-
-    // 键名/提示文字重画。动态文字必须采用「隐藏旧字 → 恢复框底 → 画新字」
-    // 三步顺序；否则「F11」与「请按新键…」会发生像素叠加。
+    // Start() 先跑 OnCreate 再 vShowAndRun 保存底层画面；创建阶段绝不能
+    // 绘制动态文字，否则会被烙进“关闭时恢复的背景”。这里由消息驱动：
+    // 开窗后首轮消息触发的 ShowMessage/重绘链自然带出键名。
     void RefreshKeyName_()
     {
         if (!key_name_) return;
@@ -213,20 +198,8 @@ struct SettingsDlg_ final : public H3Dlg
             ScanToName_(g_settings_hotkey_scan, utf8, sizeof(utf8));
         char gbk[64];
         if (!Utf8ToGbk_(utf8, gbk, sizeof(gbk))) return;
-        ClearKeyName_();
         key_name_->SetText(gbk);
-        key_name_->ShowActivate();
-        key_name_->Draw();
-        key_name_->Refresh();
-    }
-
-    // 关闭前先清掉通过 Draw+Refresh 直写的动态键名像素。
-    void OnOK() override { ClearKeyName_(); }
-    void OnCancel() override { ClearKeyName_(); }
-    void OnClose(INT itemId) override
-    {
-        (void)itemId;
-        ClearKeyName_();
+        Redraw();
     }
 
     // 键盘钩子捕获新热键/取消后，从同一线程的窗口外调这里刷新显示。
@@ -244,11 +217,7 @@ static void RunSettingsDialog_()
 {
     SettingsDlg_ dlg;
     s_active_dlg_ = &dlg;
-    dlg.Start(); // 模态，返回即关窗
-    // 键名文字在侦听期间通过 Draw+Refresh 直接更新过屏幕；
-    // 关闭后主动让窗口矩形交底层重绘，避免静止场景留下动态文字残影。
-    if (H3WindowManager* wm = H3WindowManager::Get())
-        wm->H3Redraw(dlg.GetX(), dlg.GetY(), dlg.GetWidth(), dlg.GetHeight());
+    dlg.Start(); // 模态，返回即关窗；恢复背景由 vShow 的保存链负责
     InterlockedExchange(&s_listen_new_hotkey_, 0);
     s_active_dlg_ = nullptr;
 }
