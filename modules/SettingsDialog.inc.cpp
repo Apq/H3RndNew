@@ -88,8 +88,8 @@ static const int kSdH_ = 190;
 
 struct SettingsDlg_ final : public H3Dlg
 {
-    H3DlgDef*      check_box_ = nullptr;
-    H3DlgTextPcx*  key_name_  = nullptr;
+    H3DlgDef*  check_box_ = nullptr;
+    H3DlgText* key_name_  = nullptr;
 
     SettingsDlg_() : H3Dlg(kSdW_, kSdH_) {}
 
@@ -142,9 +142,8 @@ struct SettingsDlg_ final : public H3Dlg
         ScanToName_(g_settings_hotkey_scan, initial_key_utf8,
             sizeof(initial_key_utf8));
         Utf8ToGbk_(initial_key_utf8, initial_key_gbk, sizeof(initial_key_gbk));
-        key_name_ = H3DlgTextPcx::Create(120, 92, 66, 32, initial_key_gbk,
-            "smalfont.fnt", NH3Dlg::Assets::BOX_66_32_PCX, 5,
-            kSdKeyNameId_, 5);
+        key_name_ = H3DlgText::Create(120, 96, 66, 24, initial_key_gbk,
+            "smalfont.fnt", 5, kSdKeyNameId_, 5);
         if (key_name_) {
             char key_hint_gbk[160];
             const bool key_hint_ok = Utf8ToGbk_(
@@ -153,6 +152,10 @@ struct SettingsDlg_ final : public H3Dlg
             if (key_hint_ok) key_name_->SetHint(key_hint_gbk);
             AddItem(key_name_);
         }
+        // 键名框：在对话框背景上刻下沉边框（H3 原生输入框样式，
+        // 上/左压暗、下/右提亮），不用素材图，避免突兀的底色。
+        if (H3LoadedPcx16* bg = GetBackgroundPcx())
+            bg->SinkArea(118, 92, 70, 30);
 
         // 确定按钮：closeDialog=TRUE，点击自动关窗；Enter 等效。
         H3DlgDefButton* ok = H3DlgDefButton::Create(138, 140, kSdOkId_,
