@@ -19,4 +19,5 @@ PatcherInstance* _PI = nullptr;
 #include "modules/IniUtf8.inc.cpp"
 #include "modules/ConfigLog.inc.cpp"
 #include "modules/TrueRandom.inc.cpp"
+#include "modules/SettingsDialog.inc.cpp"
 #include "modules/Entry.inc.cpp"

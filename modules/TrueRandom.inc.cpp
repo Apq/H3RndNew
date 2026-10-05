@@ -240,17 +240,26 @@ static void __stdcall OnScenarioCtor_(HiHook* hook,
     if (mode == 0) LogInventory_(dlg, "构造");
 }
 
+// 是否处于替换态：全局模式全程替换（含开局窗口内）；否则仅开局窗口内
+// 且开局勾选打开。探针计数只在「既不替换、又在窗口外」时进行，全局模式
+// 下窗口外调用是被替换的对象，不再计入探针。
+static bool InReplaceMode_()
+{
+    return g_true_random_full != 0
+        || (g_true_random != 0 && g_in_new_game_ != 0);
+}
+
 // 游戏 Rand(lo, hi)。两端无区间时原函数不取数，这里也不取。
 static int __stdcall OnGameRand_(HiHook* hook, int lo, int hi)
 {
-    if (g_true_random && g_in_new_game_ && hi > lo) {
+    if (InReplaceMode_() && hi > lo) {
         const int span = hi - lo + 1;
         const int roll = NextTrue15_();
         if (roll >= 0) {
             CountReplacedRoll_();
             return roll % span + lo;
         }
-    } else if (!g_in_new_game_) {
+    } else if (!InReplaceMode_() && !g_in_new_game_) {
         // 只统计真正的窗口外调用；窗口内失败回退不算。
         InterlockedIncrement(&g_outside_rand_calls_);
     }
@@ -260,13 +269,13 @@ static int __stdcall OnGameRand_(HiHook* hook, int lo, int hi)
 // 随机图生成器直接调的 CRT _rand，返回值同样是 0..0x7FFF。
 static int __stdcall OnCrtRand_(HiHook* hook)
 {
-    if (g_true_random && g_in_new_game_) {
+    if (InReplaceMode_()) {
         const int roll = NextTrue15_();
         if (roll >= 0) {
             CountReplacedRoll_();
             return roll;
         }
-    } else if (!g_in_new_game_) {
+    } else if (!InReplaceMode_() && !g_in_new_game_) {
         InterlockedIncrement(&g_outside_crt_calls_);
     }
     return CDECL_0(int, hook->GetDefaultFunc());
@@ -284,7 +293,9 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
     if (leaked != 0)
         LogError("真随机: 上次开局窗口未归零(%d)，已强制重置", leaked);
     InterlockedExchange(&g_replaced_count_, 0);
-    if (g_true_random)
+    if (g_true_random_full)
+        LogInfo("真随机: 全局模式开启，开局窗口内外均走系统随机");
+    else if (g_true_random)
         LogInfo("真随机: 开局取数已换成系统随机");
     int result = 0;
     __try {

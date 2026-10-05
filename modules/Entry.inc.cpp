@@ -39,9 +39,11 @@ static void LogSelfVersion_()
 static void StartPlugin()
 {
     LogSelfVersion_();
-    LogInfo("真随机: plugin enabled. TrueRandom=%d（0=伪随机 1=真随机）",
-        g_true_random);
+    LogInfo("真随机: plugin enabled. TrueRandom=%d Full=%d Hotkey=%d"
+        "（0=伪随机 1=真随机；Full=全局；Hotkey=设置键扫描码）",
+        g_true_random, g_true_random_full, g_settings_hotkey_scan);
     InstallTrueRandomHooks_();
+    InstallSettingsHooks_();
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved)

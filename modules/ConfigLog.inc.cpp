@@ -10,6 +10,13 @@ static wchar_t* g_log_path_w = new wchar_t[kPathCap_ / 2];
 // 创建新游戏建档时的随机源：0=伪随机（原版），1=真随机。
 static int g_true_random = 0;
 
+// 全局真随机（设置窗热键开关）：0=关闭（仅开局窗口替换），1=全程替换。
+// 与 g_true_random 是嵌套关系：全局开启时无视开局窗口，全程走系统级随机。
+static int g_true_random_full = 0;
+
+// 设置窗热键的键盘扫描码（=H3 内部键码）：默认 87=F11。F12=88 被 SoD_SP 占用。
+static int g_settings_hotkey_scan = 87;
+
 // 分层读取：先默认层，再叠加玩家层（键存在且非空才覆盖）。两层都未命中 → fallback。
 static bool IniReadUtf8Layered(const char* section, const char* key,
     const char* fallback, char* out, int out_size)
@@ -199,12 +206,21 @@ static void ReadConfig()
 {
     g_true_random = ClampInt(
         IniReadIntUtf8Layered("General", "TrueRandom", 0), 0, 1);
+    g_true_random_full = ClampInt(
+        IniReadIntUtf8Layered("General", "TrueRandomFull", 0), 0, 1);
+    {
+        const int scan = IniReadIntUtf8Layered("General",
+            "SettingsHotkeyScan", 87);
+        // 合法扫描码 1..0x58（ESC..F12）；越界回落默认 F11=87。
+        g_settings_hotkey_scan = (scan >= 1 && scan <= 0x58) ? scan : 87;
+    }
 
     char lv[16] = {};
     IniReadUtf8Layered("Logging", "MinLevel", "info", lv, sizeof(lv));
     g_log_level = ParseLogLevel_(lv);
-    LogInfo("配置加载：TrueRandom=%d MinLevel=%s",
-        g_true_random, LogLevelName_(g_log_level));
+    LogInfo("配置加载：TrueRandom=%d Full=%d Hotkey=%d MinLevel=%s",
+        g_true_random, g_true_random_full, g_settings_hotkey_scan,
+        LogLevelName_(g_log_level));
 }
 
 static void AppendUtf8LogLine(const char* text)

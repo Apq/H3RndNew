@@ -18,6 +18,8 @@
     <ClCompile Include="H3RndNew.cpp" />
     <ClCompile Include="modules\ConfigLog.inc.cpp" />
     <ClCompile Include="modules\Entry.inc.cpp" />
+    <ClCompile Include="modules\SettingsDialog.inc.cpp" />
+    <ClCompile Include="modules\TrueRandom.inc.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />
