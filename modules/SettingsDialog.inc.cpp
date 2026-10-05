@@ -91,6 +91,7 @@ static const int kSdH_ = 190;
 struct SettingsDlg_ final : public H3Dlg
 {
     H3DlgDef*  check_box_ = nullptr;
+    H3DlgPcx*  key_frame_ = nullptr;
     H3DlgText* key_name_  = nullptr;
 
     SettingsDlg_() : H3Dlg(kSdW_, kSdH_) {}
@@ -138,9 +139,9 @@ struct SettingsDlg_ final : public H3Dlg
             if (key_hint_ok) key_label->SetHint(key_hint_gbk);
             AddItem(key_label);
         }
-        H3DlgPcx* key_frame = H3DlgPcx::Create(120, 92, kSdKeyFrameId_,
+        key_frame_ = H3DlgPcx::Create(120, 92, kSdKeyFrameId_,
             NH3Dlg::Assets::BOX_66_32_PCX);
-        if (key_frame) AddItem(key_frame);
+        if (key_frame_) AddItem(key_frame_);
         H3DlgTransparentItem* key_hit = H3DlgTransparentItem::Create(
             120, 92, 66, 32, kSdKeyHitId_);
         if (key_hit) {
@@ -187,8 +188,21 @@ struct SettingsDlg_ final : public H3Dlg
         return FALSE; // OK 按钮由 closeDialog 默认逻辑关窗
     }
 
-    // 键名/提示文字重画。SetText 只写缓冲，Draw+Refresh 才上屏；
-    // ShowActivate 先行，避免被对话框后续重绘抹掉（开局模块同款顺序）。
+    // 先隐藏动态文字，再重画键名框背景；否则 SetText 后 Draw 会把
+    // 新字符串直接叠到旧字符串上。提示文字由对话框框架绘制，不走此路径。
+    void ClearKeyName_()
+    {
+        if (key_name_)
+            key_name_->Hide();
+        if (key_frame_) {
+            key_frame_->Show();
+            key_frame_->Draw();
+            key_frame_->Refresh();
+        }
+    }
+
+    // 键名/提示文字重画。动态文字必须采用「隐藏旧字 → 恢复框底 → 画新字」
+    // 三步顺序；否则「F11」与「请按新键…」会发生像素叠加。
     void RefreshKeyName_()
     {
         if (!key_name_) return;
@@ -199,10 +213,20 @@ struct SettingsDlg_ final : public H3Dlg
             ScanToName_(g_settings_hotkey_scan, utf8, sizeof(utf8));
         char gbk[64];
         if (!Utf8ToGbk_(utf8, gbk, sizeof(gbk))) return;
-        key_name_->ShowActivate();
+        ClearKeyName_();
         key_name_->SetText(gbk);
+        key_name_->ShowActivate();
         key_name_->Draw();
         key_name_->Refresh();
+    }
+
+    // 关闭前先清掉通过 Draw+Refresh 直写的动态键名像素。
+    void OnOK() override { ClearKeyName_(); }
+    void OnCancel() override { ClearKeyName_(); }
+    void OnClose(INT itemId) override
+    {
+        (void)itemId;
+        ClearKeyName_();
     }
 
     // 键盘钩子捕获新热键/取消后，从同一线程的窗口外调这里刷新显示。
