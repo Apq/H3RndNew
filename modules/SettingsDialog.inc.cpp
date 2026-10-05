@@ -172,12 +172,12 @@ struct SettingsDlg_ final : public H3Dlg
         if (itemId == kSdCheckId_ || itemId == kSdCheckHitId_) {
             g_true_random_full = g_true_random_full ? 0 : 1;
             PersistTrueRandomFull_();
-            // DefButton 的 clickFrame 只是“按住期间”的显示帧，松开仍回
-            // defFrame；开关状态必须在点击后写回 defFrame 才会保持。
+            // DefButton 的 clickFrame 是“按住期间”的显示帧；把它设成与
+            // 松开后的状态帧相同，按下→松开全程无视觉跳变。
             if (check_box_) {
                 const int frame = g_true_random_full ? 1 : 0;
                 check_box_->SetFrame(frame);
-                check_box_->SetClickFrame(1 - frame);
+                check_box_->SetClickFrame(frame);
                 check_box_->Draw();
                 check_box_->ParentRedraw();
             }
