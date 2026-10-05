@@ -42,6 +42,16 @@ build.bat
 
 它用 Visual Studio 2026 的 MSBuild 做 Release|Win32 全量 Rebuild。产物是 `Release\H3RndNew.dll`。编译依赖仓库里的 `H3API\single_header`，不另带一份头文件。
 
+## 打包
+
+在本目录执行：
+
+```text
+pack.bat
+```
+
+它把部署目录（默认 `D:\Heroes3\Heroes3_2026.05.01\_HD3_Data\Packs\真随机开局`）里的插件文件打成 `Release\真随机开局_vX.Y.zip`，版本号取自 `H3RndNew.rc` 的 `FileVersion` 前两段。包内带 `真随机开局\` 前缀目录，解压到游戏 `Packs` 即装。运行日志（`*.log`）和玩家配置 `H3RndNew.user.ini` 自动排除。成功后窗口默认直接关闭，要看结果先 `set PAUSE_ON_SUCCESS=1 && pack.bat`。
+
 ## 配置
 
 `H3RndNew.default.ini` 是出厂默认，升级会被覆盖。玩家改动写在同目录的 `H3RndNew.user.ini`，没有这个文件也能跑。
