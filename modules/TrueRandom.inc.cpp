@@ -30,6 +30,17 @@ static volatile LONG g_replaced_count_ = 0;
 // 窗口外被 hook 拦到、按原版走的调用数：验证替换范围没有扩大到战斗/走动。
 static volatile LONG g_outside_rand_calls_ = 0; // 0x50C7C0 Rand
 static volatile LONG g_outside_crt_calls_ = 0;  // 0x61842C _rand
+// 全局模式下「开局窗口外」被真随机替换的次数：全局生效的直接证据。
+static volatile LONG g_full_replaced_calls_ = 0;
+
+// 全局模式下窗口外替换累计到一定量级留一条日志，证明全程替换在跑。
+static void CountFullReplacedRoll_()
+{
+    const LONG n = InterlockedIncrement(&g_full_replaced_calls_);
+    if ((n & 0x3FFFF) == 0) // 每 26 万次一条，避免刷屏
+        LogInfo("真随机: 全局模式已累计替换 %d 次（含窗口外）",
+            static_cast<int>(n));
+}
 
 // 每替换 65536 次留一条进度日志：崩溃时最后一行进度就是崩前的量级。
 static void CountReplacedRoll_()
@@ -257,6 +268,8 @@ static int __stdcall OnGameRand_(HiHook* hook, int lo, int hi)
         const int roll = NextTrue15_();
         if (roll >= 0) {
             CountReplacedRoll_();
+            if (!g_in_new_game_)
+                CountFullReplacedRoll_(); // 窗口外的替换：全局生效证据
             return roll % span + lo;
         }
     } else if (!InReplaceMode_() && !g_in_new_game_) {
@@ -273,6 +286,8 @@ static int __stdcall OnCrtRand_(HiHook* hook)
         const int roll = NextTrue15_();
         if (roll >= 0) {
             CountReplacedRoll_();
+            if (!g_in_new_game_)
+                CountFullReplacedRoll_();
             return roll;
         }
     } else if (!InReplaceMode_() && !g_in_new_game_) {
@@ -283,11 +298,19 @@ static int __stdcall OnCrtRand_(HiHook* hook)
 
 static int __stdcall OnStartGame_(HiHook* hook, int self)
 {
-    // 报告上一窗口结束至今窗口外的取数：都应只计数、不替换。
+    // 报告上一窗口结束至今窗口外的取数：非全局模式下都应只计数、不替换；
+    // 全局模式下窗口外调用已被替换，探针为零是预期，不说明走原版。
     const LONG outside_rand = InterlockedExchange(&g_outside_rand_calls_, 0);
     const LONG outside_crt = InterlockedExchange(&g_outside_crt_calls_, 0);
-    LogInfo("真随机: 上一窗口外 Rand 调用 %d 次、_rand 调用 %d 次，均走原版",
-        static_cast<int>(outside_rand), static_cast<int>(outside_crt));
+    if (g_true_random_full)
+        LogInfo("真随机: 全局模式运行中，上一局窗口外替换 %d 次、"
+            "原版放行 0 次（探针 Rand=%d _rand=%d 为全局替换所致）",
+            static_cast<int>(InterlockedExchange(&g_full_replaced_calls_, 0)),
+            static_cast<int>(outside_rand),
+            static_cast<int>(outside_crt));
+    else
+        LogInfo("真随机: 上一窗口外 Rand 调用 %d 次、_rand 调用 %d 次，均走原版",
+            static_cast<int>(outside_rand), static_cast<int>(outside_crt));
     // 若上次异常退出没归零，这里强制重置并留痕，防止泄漏殃及战斗取数。
     const LONG leaked = InterlockedExchange(&g_in_new_game_, 1);
     if (leaked != 0)
