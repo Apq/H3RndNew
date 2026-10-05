@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Release" />
+    <Platform Name="Win32" />
+  </Configurations>
+  <Project Path="H3RndNew.vcxproj" Id="D5F91C28-7E3A-4054-A021-9C3B8E6D4A72" />
+</Solution>

@@ -1,0 +1,61 @@
+// Microsoft Visual C++ generated resource script.
+//
+#include "resource.h"
+
+/////////////////////////////////////////////////////////////////////////////
+//  Chinese resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_CHS)
+LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
+#pragma code_page(936)
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+IDR_VERSIONINFO VERSIONINFO
+ FILEVERSION 0,1,2026,1005
+ PRODUCTVERSION 0,1,2026,1005
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x2L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "Comments", "真随机"
+            VALUE "CompanyName", "Apq"
+            VALUE "FileDescription", "真随机"
+            VALUE "FileVersion", "0.1.2026.1005"
+            VALUE "InternalName", "H3RndNew"
+            VALUE "LegalCopyright", "Copyright (C) Apq"
+            VALUE "OriginalFilename", "H3RndNew.dll"
+            VALUE "ProductName", "真随机"
+            VALUE "ProductVersion", "0.1.2026.1005"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END
+
+#endif    // Chinese resources
+/////////////////////////////////////////////////////////////////////////////
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+
+/////////////////////////////////////////////////////////////////////////////
+#endif
