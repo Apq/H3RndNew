@@ -87,10 +87,11 @@ static const int kSdLogLabelId_  = 0x7E18; // 「日志等级：」文字
 static const int kSdLogDdId_     = 0x7E19; // 日志等级下拉框收起态
 static const int kSdLogItem0Id_  = 0x7E20; // 展开列表项 0..4（五级）
 static const int kSdW_ = 340;
-static const int kSdH_ = 240;
+static const int kSdH_ = 190;
 
-// 日志等级下拉：布局常量（收起框 / 展开列表 / 三角箭头）。
-static const int kSdLogRow_     = 136;   // 行 y（标签与收起框）
+// 日志等级下拉：布局常量（收起框 / 展开列表）。行放在标题正下方，
+// 展开列表向下覆盖复选框/热键行，全部落在窗口内，无需加高窗口。
+static const int kSdLogRow_     = 44;    // 行 y（标签与收起框）
 static const int kSdLogDdX_     = 120;   // 收起框 x（与键名框对齐）
 static const int kSdLogDdW_     = 100;
 static const int kSdLogDdH_     = 24;
@@ -113,6 +114,41 @@ struct SettingsDlg_ final : public H3Dlg
             Utf8ToGbk_("真随机 设置", gbk, sizeof(gbk)) ? gbk : "",
             "smalfont.fnt", 1, kSdTitleId_, 5, 0);
         if (title) AddItem(title);
+
+        // 日志等级行：放标题正下方，展开列表向下覆盖复选框/热键行，
+        // 全部落在窗口内，窗口保持 190 高。当前等级名由框架绘制。
+        H3DlgText* log_label = H3DlgText::Create(60, kSdLogRow_, 52, 24,
+            Utf8ToGbk_("日志：", gbk, sizeof(gbk)) ? gbk : "",
+            "smalfont.fnt", 5, kSdLogLabelId_, 4, 0);
+        if (log_label) {
+            char lv_hint_gbk[160];
+            const bool lv_hint_ok = Utf8ToGbk_(
+                "低于该等级的日志不写盘；修改立即生效并保存到 user.ini",
+                lv_hint_gbk, sizeof(lv_hint_gbk)) != 0;
+            if (lv_hint_ok) log_label->SetHint(lv_hint_gbk);
+            AddItem(log_label);
+        }
+        log_dd_text_ = H3DlgText::Create(kSdLogDdX_, kSdLogRow_,
+            kSdLogDdW_, kSdLogDdH_, "",
+            "smalfont.fnt", 5, kSdLogDdId_, 5, 0);
+        if (log_dd_text_) {
+            char lv_hint_gbk[160];
+            const bool lv_hint_ok = Utf8ToGbk_(
+                "点击展开日志等级选项",
+                lv_hint_gbk, sizeof(lv_hint_gbk)) != 0;
+            if (lv_hint_ok) log_dd_text_->SetHint(lv_hint_gbk);
+            AddItem(log_dd_text_);
+            // 收起框下沉边框（与键名框同款）。
+            if (H3LoadedPcx16* bg = GetBackgroundPcx())
+                bg->SinkArea(kSdLogDdX_ - 2, kSdLogRow_ - 2,
+                    kSdLogDdW_ + 4, kSdLogDdH_ + 4);
+            UpdateLogLevelText_();
+        }
+
+        // 确定按钮：closeDialog=TRUE，点击自动关窗；Enter 等效。
+        H3DlgDefButton* ok = H3DlgDefButton::Create(138, 140, kSdOkId_,
+            "iokay.def", 0, 1, TRUE, NH3VKey::H3VK_ENTER);
+        if (ok) AddItem(ok);
 
         // 全局真随机：系统选项同款开关复选框（sysopchk.def，金色系）
         // + 可点标签。frame 0=关 1=开，点击自动翻转，不用手工重绘。
@@ -172,37 +208,9 @@ struct SettingsDlg_ final : public H3Dlg
         if (H3LoadedPcx16* bg = GetBackgroundPcx())
             bg->SinkArea(118, 92, 70, 30);
 
-        // 日志等级行：标签 + 自绘下拉框（H3Auto 帮助界面同款交互：
-        // 点框展开、点选生效、点外部收起）。当前等级名也由框架绘制。
-        H3DlgText* log_label = H3DlgText::Create(60, kSdLogRow_, 52, 24,
-            Utf8ToGbk_("日志：", gbk, sizeof(gbk)) ? gbk : "",
-            "smalfont.fnt", 5, kSdLogLabelId_, 4, 0);
-        if (log_label) {
-            char lv_hint_gbk[160];
-            const bool lv_hint_ok = Utf8ToGbk_(
-                "低于该等级的日志不写盘；修改立即生效并保存到 user.ini",
-                lv_hint_gbk, sizeof(lv_hint_gbk)) != 0;
-            if (lv_hint_ok) log_label->SetHint(lv_hint_gbk);
-            AddItem(log_label);
-        }
-        log_dd_text_ = H3DlgText::Create(kSdLogDdX_, kSdLogRow_,
-            kSdLogDdW_, kSdLogDdH_, "",
-            "smalfont.fnt", 5, kSdLogDdId_, 5, 0);
-        if (log_dd_text_) {
-            char lv_hint_gbk[160];
-            const bool lv_hint_ok = Utf8ToGbk_(
-                "点击展开日志等级选项",
-                lv_hint_gbk, sizeof(lv_hint_gbk)) != 0;
-            if (lv_hint_ok) log_dd_text_->SetHint(lv_hint_gbk);
-            AddItem(log_dd_text_);
-            // 收起框下沉边框（与键名框同款）。
-            if (H3LoadedPcx16* bg = GetBackgroundPcx())
-                bg->SinkArea(kSdLogDdX_ - 2, kSdLogRow_ - 2,
-                    kSdLogDdW_ + 4, kSdLogDdH_ + 4);
-            UpdateLogLevelText_();
-        }
         // 展开列表项：默认隐藏，展开时 Show、收起时 Hide（框架绘制，
-        // 不碰背景纹理）。y 排在收起框下方。
+        // 不碰背景纹理）。y 排在收起框下方；创建顺序在 OK 按钮之后，
+        // 展开时自然盖在按钮之上。
         for (int i = 0; i < kSdLogLevelCount_; ++i) {
             char gbk[64];
             if (!Utf8ToGbk_(LogLevelDisplayName_(i), gbk, sizeof(gbk)))
@@ -216,12 +224,6 @@ struct SettingsDlg_ final : public H3Dlg
                 AddItem(item);
             }
         }
-
-        // 确定按钮：closeDialog=TRUE，点击自动关窗；Enter 等效。
-        // 窗口加高到 240 后按钮下移到日志行下方。
-        H3DlgDefButton* ok = H3DlgDefButton::Create(138, 200, kSdOkId_,
-            "iokay.def", 0, 1, TRUE, NH3VKey::H3VK_ENTER);
-        if (ok) AddItem(ok);
         return TRUE;
     }
 
