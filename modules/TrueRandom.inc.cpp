@@ -363,7 +363,14 @@ static int __stdcall OnCrtRand_(HiHook* hook)
 // "__try/__finally 归零"结构，异常继续传播（游戏自身崩溃不吞）。
 static int __stdcall OnStartGame_(HiHook* hook, int self)
 {
+    BOOL is_load_game = FALSE;
     __try {
+        // 读档路径自证（2026-10-06 实测修正）：0x58BFB0 同时服务「新游戏开始」
+        // 与「读取存档进入」，由 this+0x37f 区分（0=新游戏，非0=读档，读档分支
+        // FUN_00587c70 加载存档）。读档不应受开局真随机影响：存档里的世界是
+        // 既成的，重掷随机会破坏读档一致性。读档只走审计，不开替换窗口。
+        const BOOL load_flag = *(char*)(self + 0x37f) != 0;
+        is_load_game = load_flag;
         // 报告上一窗口结束至今窗口外的取数：非全局模式下都应只计数、不替换；
         // 全局模式下窗口外调用已被替换，探针为零是预期，不说明走原版。
         const LONG outside_rand = InterlockedExchange(&g_outside_rand_calls_, 0);
@@ -377,7 +384,11 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
         else
             LogInfo("真随机: 上一窗口外探针 Rand=%d _rand=%d（均为原版）",
                 static_cast<int>(outside_rand), static_cast<int>(outside_crt));
-        LogRandomAudit_("开始前");
+        LogRandomAudit_(is_load_game ? "读档开始前" : "开始前");
+        if (is_load_game) {
+            // 读档：不开开局真随机窗口；全局档不受影响（不依赖开局窗口）。
+            LogInfo("真随机: 读档路径（this+0x37f!=0），开局窗口跳过，开局档不介入");
+        } else {
         // 若上次异常退出没归零，这里强制重置并留痕，防止泄漏殃及战斗取数。
         const LONG leaked = InterlockedExchange(&g_in_new_game_, 1);
         if (leaked != 0)
@@ -387,6 +398,7 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
             LogInfo("真随机: 全局模式开启，开局窗口内外均走系统随机");
         else if (g_true_random)
             LogInfo("真随机: 开局取数已换成系统随机");
+        }
     } __except (GuardCrashFilter_(GUARD_START_GAME, GetExceptionInformation())) {}
 
     int result = 0;
@@ -398,9 +410,14 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
         InterlockedExchange(&g_in_new_game_, 0);
     }
     __try {
-        LogInfo("真随机: 开局取数窗口结束，共替换 %d 次",
-            static_cast<int>(g_replaced_count_));
-        LogRandomAudit_("开局结束");
+        if (is_load_game) {
+            LogInfo("真随机: 读档进入完成，开局档全程未介入");
+            LogRandomAudit_("读档结束");
+        } else {
+            LogInfo("真随机: 开局取数窗口结束，共替换 %d 次",
+                static_cast<int>(g_replaced_count_));
+            LogRandomAudit_("开局结束");
+        }
     } __except (GuardCrashFilter_(GUARD_START_GAME, GetExceptionInformation())) {}
     return result;
 }
