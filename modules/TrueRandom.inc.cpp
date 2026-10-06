@@ -5,7 +5,6 @@
 static const UINT32 kScenarioDlgCtor_ = 0x579CE0; // thiscall(dlg, mode)
 static const UINT32 kScenarioDlgProc_ = 0x587FD0; // thiscall(dlg, msg)
 static const UINT32 kStartGame_       = 0x58BFB0; // fastcall(this)，开始/装载共用建档入口
-static const UINT32 kLoadConfirm_     = 0x5776E0; // fastcall(this)，读取界面确认读档
 static const UINT32 kGameRand_        = 0x50C7C0; // fastcall(lo, hi)
 static const UINT32 kCrtRand_         = 0x61842C; // cdecl，随机图生成器直接调它
 
@@ -26,13 +25,19 @@ static const char kCheckHint_[] = "\xBF\xAA\xBE\xD6\xD5\xE6\xCB\xE6\xBB\xFA";
 
 // 只在点开始到建档返回之间为 1。战斗、菜单、走动中的取数看到的是 0。
 static volatile LONG g_in_new_game_ = 0;
-// 读档确认标记：0x5776E0（读取界面确认按钮，两处调用点均为读档确认）入口
-// 记 GetTickCount；清除有两处——0x58BFB0 建档入口读取时原子消费，以及任何
-// 一次选图对话框构造时（进入选图界面即意味着已离开读档流程，与构造模式
-// 无关、与复选框放置成败无关）。0x58BFB0 是开始/装载共用的建档入口，入口
-// 时对象上的模式标志不可靠（15:48 实测 +0x37f/+0x65 均为 0 但实际在读档），
-// 只能靠这个标记区分读档。生命周期纯事件驱动，不设时间窗。
-static volatile LONG g_load_confirm_tick_ = 0;
+// 界面上下文由构造和原消息处理前的字段快照更新；建档入口一次消费。
+// 只有明确的新游戏上下文允许开局替换，未知/读取/战役均走原版。
+#include "ScenarioContext.hpp"
+
+static const char* ScenarioContextName_(ScenarioContext_ context)
+{
+    switch (context) {
+    case kScenarioNewGame_: return "新游戏";
+    case kScenarioLoad_: return "读档";
+    case kScenarioCampaign_: return "战役";
+    default: return "未知";
+    }
+}
 // 本次开局窗口内真随机实际替换的次数，退出时落日志定位崩溃点。
 static volatile LONG g_replaced_count_ = 0;
 // 窗口外被 hook 拦到、按原版走的调用数：验证替换范围没有扩大到战斗/走动。
@@ -219,7 +224,6 @@ static void PlaceTrueRandomCheckbox_(H3SelectScenarioDialog* dlg,
 static const int GUARD_SCENARIO_CTOR = GuardRegisterHook_("ScenarioDlgCtor");
 static const int GUARD_SCENARIO_PROC = GuardRegisterHook_("ScenarioDlgProc");
 static const int GUARD_START_GAME   = GuardRegisterHook_("StartGame");
-static const int GUARD_LOAD_CONFIRM = GuardRegisterHook_("LoadConfirm");
 static const int GUARD_GAME_RAND    = GuardRegisterHook_("GameRand");
 static const int GUARD_CRT_RAND     = GuardRegisterHook_("CrtRand");
 
@@ -230,6 +234,19 @@ static int __stdcall OnScenarioProc_(HiHook* hook,
     H3SelectScenarioDialog* dlg, H3Msg* msg)
 {
     __try {
+        // 必须在原消息处理前观察：回车也可能在原函数内部直接建档。
+        if (dlg) {
+            const ScenarioContext_ context = ClassifyScenarioContext_(
+                dlg->isCampaignMaybe != 0, dlg->isLoadingMaybe != 0);
+            const LONG previous = ObserveScenarioContext_(context);
+            if (previous != context)
+                LogInfo("真随机: 场景消息前 dlg=0x%08X +64=%d +65=%d +66=%d "
+                    "cmd=%d subtype=%d id=%d → %s",
+                    reinterpret_cast<UINT32>(dlg), dlg->isCampaignMaybe,
+                    dlg->isLoadingMaybe, dlg->_f_66,
+                    msg ? msg->command : -1, msg ? msg->subtype : -1,
+                    msg ? msg->itemId : -1, ScenarioContextName_(context));
+        }
         if (msg && dlg
             && msg->command == eMsgCommand::ITEM_COMMAND
             && msg->subtype == eMsgSubtype::LBUTTON_DOWN)
@@ -276,26 +293,16 @@ static void __stdcall OnScenarioCtor_(HiHook* hook,
     __try {
         s_seen_dlg_ = nullptr;
         s_label_ = nullptr;
-        // 任何一次选图界面构造（新游戏/战役/读取，无论模式）都意味着用户
-        // 已离开上一次读档流程：无条件清读档确认标记，纯事件驱动无时间窗。
-        InterlockedExchange(&g_load_confirm_tick_, 0);
+        const ScenarioContext_ context = dlg ? ClassifyScenarioContext_(
+            dlg->isCampaignMaybe != 0, dlg->isLoadingMaybe != 0) : kScenarioUnknown_;
+        ObserveScenarioContext_(context);
+        LogInfo("真随机: 场景构造 dlg=0x%08X mode=%d +64=%d +65=%d +66=%d → %s",
+            reinterpret_cast<UINT32>(dlg), mode,
+            dlg ? dlg->isCampaignMaybe : -1, dlg ? dlg->isLoadingMaybe : -1,
+            dlg ? dlg->_f_66 : -1, ScenarioContextName_(context));
         // 构造刚完，HD 的重排还没跑，这里只留一份清单做对照。
         if (mode == 0) LogInventory_(dlg, "构造");
     } __except (GuardCrashFilter_(GUARD_SCENARIO_CTOR, GetExceptionInformation())) {}
-}
-
-// 读档确认按钮 0x5776E0：读取/载入界面点「确认」即进这里（反编译两处调用
-// 点均为读档确认分支）。入口记时戳，供 0x58BFB0 建档入口区分读档与新游戏。
-// 铠甲：标记段 __try；原函数调用在 __try 之外、恰好一次。
-static signed char __stdcall OnLoadConfirm_(HiHook* hook, int self)
-{
-    __try {
-        InterlockedExchange(&g_load_confirm_tick_,
-            static_cast<LONG>(GetTickCount()));
-        LogInfo("真随机: 读档确认（0x5776E0），标记已记录");
-    } __except (GuardCrashFilter_(GUARD_LOAD_CONFIRM, GetExceptionInformation())) {}
-
-    return FASTCALL_1(signed char, hook->GetDefaultFunc(), self);
 }
 
 // 是否处于替换态：全局模式全程替换（含开局窗口内）；否则仅开局窗口内
@@ -389,24 +396,17 @@ static int __stdcall OnCrtRand_(HiHook* hook)
 // "__try/__finally 归零"结构，异常继续传播（游戏自身崩溃不吞）。
 static int __stdcall OnStartGame_(HiHook* hook, int self)
 {
-    BOOL is_load_game = FALSE;
+    BOOL allow_window = FALSE;
+    ScenarioContext_ context = kScenarioUnknown_;
     __try {
-        // 读档路径判定（2026-10-06 二次实测修正）：0x58BFB0 是开始/装载共用
-        // 的建档入口，但入口时对象上的模式标志不可靠——15:48 日志证实主菜单
-        // 读档进入时 +0x37f 与 +0x65 均为 0（读档确认按钮 0x5776E0 把存档名
-        // 发布到全局后，外层流程再调本函数，此时标志已不是读取界面当时的值）。
-        // 可靠判据是读档确认标记：0x5776E0 入口置位，本入口原子消费，选图
-        // 对话框构造时清除（事件驱动，无时间窗）。读档不重掷存档世界（重建
-        // 取数走原版 LCG，保证读档一致性），只走审计，不开替换窗口。
-        const BOOL load_flag = *(char*)(self + 0x37f) != 0;
-        const LONG confirm_tick = InterlockedExchange(&g_load_confirm_tick_, 0);
-        const BOOL confirm_pending = confirm_tick != 0;
-        is_load_game = load_flag || confirm_pending;
-        // 诊断：一次进入把全部判据落盘，读档误判时可直接归因。
-        LogInfo("真随机: 建档入口判据 +0x37f=%d 读档确认=%d → %s",
-            load_flag ? 1 : 0,
-            confirm_pending ? 1 : 0,
-            is_load_game ? "读档" : "新游戏");
+        context = ConsumeScenarioContext_();
+        allow_window = AllowsNewGameWindow_(context);
+        InterlockedExchange(&g_in_new_game_, 0);
+        InterlockedExchange(&g_replaced_count_, 0);
+        // +37f 只留诊断，不再把未确认语义的字段作为读档判据。
+        LogInfo("真随机: 建档入口 self=0x%08X +37f=%d 上下文=%s 开局窗口=%d",
+            self, static_cast<int>(*reinterpret_cast<BYTE*>(self + 0x37f)),
+            ScenarioContextName_(context), allow_window);
         // 报告上一窗口结束至今窗口外的取数：非全局模式下都应只计数、不替换；
         // 全局模式下窗口外调用已被替换，探针为零是预期，不说明走原版。
         const LONG outside_rand = InterlockedExchange(&g_outside_rand_calls_, 0);
@@ -420,25 +420,24 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
         else
             LogInfo("真随机: 上一窗口外探针 Rand=%d _rand=%d（均为原版）",
                 static_cast<int>(outside_rand), static_cast<int>(outside_crt));
-        LogRandomAudit_(is_load_game ? "读档开始前" : "开始前");
-        if (is_load_game) {
-            // 读档：不开开局真随机窗口；全局档不受影响（不依赖开局窗口）。
-            LogInfo("真随机: 读档路径，开局窗口跳过，开局档不介入");
+        LogRandomAudit_(context == kScenarioLoad_ ? "读档开始前" : "开始前");
+        if (!allow_window) {
+            LogInfo("真随机: %s路径，开局窗口跳过（全局档仍按其开关运行）",
+                ScenarioContextName_(context));
         } else {
-        // 若上次异常退出没归零，这里强制重置并留痕，防止泄漏殃及战斗取数。
-        const LONG leaked = InterlockedExchange(&g_in_new_game_, 1);
-        if (leaked != 0)
-            LogError("真随机: 上次开局窗口未归零(%d)，已强制重置", leaked);
-        InterlockedExchange(&g_replaced_count_, 0);
-        if (g_true_random_full)
-            LogInfo("真随机: 全局模式开启，开局窗口内外均走系统随机");
-        else if (g_true_random) {
-            LogInfo("真随机: 开局取数已换成系统随机");
-            // 随机源自证：打印 4 个 BCrypt 原始字节样本，两次开局对比不同
-            // 即证明系统随机源本身无退化（这些样本只进日志不进游戏取数）。
-            LogInfo("真随机: 随机源采样 %04X %04X %04X %04X",
-                NextTrue15_(), NextTrue15_(), NextTrue15_(), NextTrue15_());
-        }
+            if (g_true_random_full)
+                LogInfo("真随机: 全局模式开启，开局窗口内外均走系统随机");
+            else if (g_true_random) {
+                LogInfo("真随机: 开局取数已换成系统随机");
+                // 仅作源输出诊断，不参与游戏取数，不能据此证明地形生成路径。
+                const int sample0 = NextTrue15_();
+                const int sample1 = NextTrue15_();
+                const int sample2 = NextTrue15_();
+                const int sample3 = NextTrue15_();
+                LogInfo("真随机: 系统随机15位采样 %04X %04X %04X %04X",
+                    sample0, sample1, sample2, sample3);
+            }
+            InterlockedExchange(&g_in_new_game_, 1);
         }
     } __except (GuardCrashFilter_(GUARD_START_GAME, GetExceptionInformation())) {}
 
@@ -451,9 +450,9 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
         InterlockedExchange(&g_in_new_game_, 0);
     }
     __try {
-        if (is_load_game) {
-            LogInfo("真随机: 读档进入完成，开局档全程未介入");
-            LogRandomAudit_("读档结束");
+        if (!allow_window) {
+            LogInfo("真随机: %s进入完成，开局窗口未启用", ScenarioContextName_(context));
+            LogRandomAudit_(context == kScenarioLoad_ ? "读档结束" : "窗口跳过结束");
         } else {
             LogInfo("真随机: 开局取数窗口结束，共替换 %d 次",
                 static_cast<int>(g_replaced_count_));
@@ -472,8 +471,6 @@ static void InstallTrueRandomHooks_()
         reinterpret_cast<void*>(&OnScenarioProc_));
     _PI->WriteHiHook(kStartGame_, SPLICE_, EXTENDED_, FASTCALL_,
         reinterpret_cast<void*>(&OnStartGame_));
-    _PI->WriteHiHook(kLoadConfirm_, SPLICE_, EXTENDED_, FASTCALL_,
-        reinterpret_cast<void*>(&OnLoadConfirm_));
     _PI->WriteHiHook(kGameRand_, SPLICE_, EXTENDED_, FASTCALL_,
         reinterpret_cast<void*>(&OnGameRand_));
     _PI->WriteHiHook(kCrtRand_, SPLICE_, EXTENDED_, CDECL_,

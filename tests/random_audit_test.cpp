@@ -22,6 +22,7 @@ static void LogInfo(const char* format, ...)
 }
 static void LogWarn(const char*, ...) { ++warning_lines; }
 #include "../modules/RandomAudit.inc.cpp"
+#include "../modules/ScenarioContext.hpp"
 static void require(bool ok, const char* message)
 {
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", message); std::exit(1); }
@@ -34,6 +35,24 @@ static void verify(const RandomAuditCounters_& c)
 }
 int main()
 {
+    // Window authorization is independent of mouse/key messages and elapsed time.
+    require(!AllowsNewGameWindow_(ConsumeScenarioContext_()), "unknown denies window");
+    ObserveScenarioContext_(ClassifyScenarioContext_(false, true));
+    require(ConsumeScenarioContext_() == kScenarioLoad_, "load before battle");
+    require(!AllowsNewGameWindow_(ConsumeScenarioContext_()), "context consumed once");
+    ObserveScenarioContext_(ClassifyScenarioContext_(false, true));
+    ObserveScenarioContext_(ClassifyScenarioContext_(false, false));
+    require(AllowsNewGameWindow_(ConsumeScenarioContext_()), "load cancelled then single scenario");
+    ObserveScenarioContext_(ClassifyScenarioContext_(false, true));
+    require(!AllowsNewGameWindow_(ConsumeScenarioContext_()), "new game then load");
+    ObserveScenarioContext_(ClassifyScenarioContext_(true, false));
+    require(!AllowsNewGameWindow_(ConsumeScenarioContext_()), "campaign denies window");
+    // A message-pre snapshot also works when a constructor hook was bypassed.
+    ObserveScenarioContext_(ClassifyScenarioContext_(false, true));
+    require(!AllowsNewGameWindow_(ConsumeScenarioContext_()), "load keyboard confirm");
+    ObserveScenarioContext_(ClassifyScenarioContext_(false, false));
+    require(AllowsNewGameWindow_(ConsumeScenarioContext_()), "new game keyboard confirm");
+    require(ClassifyScenarioContext_(true, true) == kScenarioLoad_, "load takes priority");
     InitRandomAudit_();
     LogRandomAudit_("startup");
     require(audit_lines == 4, "initial four scope/entry lines");

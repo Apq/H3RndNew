@@ -64,6 +64,7 @@
     <ClInclude Include="modules\IniUtf8.inc.cpp" />
     <ClInclude Include="modules\ConfigLog.inc.cpp" />
     <ClInclude Include="modules\RandomAudit.inc.cpp" />
+    <ClInclude Include="modules\ScenarioContext.hpp" />
     <ClInclude Include="modules\TrueRandom.inc.cpp" />
     <ClInclude Include="modules\SettingsDialog.inc.cpp" />
     <ClInclude Include="modules\Entry.inc.cpp" />
