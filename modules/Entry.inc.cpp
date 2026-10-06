@@ -71,13 +71,30 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved)
         g_disable_log = ReadDisableLogFromIniFiles();
         delete[] wpath;
         SetupDatedLogPathAndCleanup(hModule);
+
+        // CrashGuard L1：无条件安装崩溃自记录（版本不对也要能记录崩溃）。
+        // DisableLog 时 g_log_path_w 为空，防御日志随之关闭。
+        GuardSetLogPathW(g_log_path_w);
+        InstallCrashGuard();
+
         LogInfo("真随机 loading.");
         _P = GetPatcher();
         if (!_P) { LogError("GetPatcher failed."); return TRUE; }
         _PI = _P->CreateInstance("HD.Plugin.H3RndNew");
         if (!_PI) { LogError("CreateInstance failed."); return TRUE; }
+
+        // CrashGuard L4 版本门卫：SoD 数据指纹不吻合（完整版/HotA/改版 exe）
+        // 时不挂钩——RNG 入口偏移错配的代价比失去功能大得多。
+        if (!GuardVerifySodBytes_()) {
+            LogError("[Guard] 版本门卫不通过：已停用全部钩子（仅保留日志与崩溃自记录）。");
+            return TRUE;
+        }
+
         ReadConfig();
         StartPlugin();
+    } else if (reason == DLL_PROCESS_DETACH) {
+        // 判读生死标记：日志末尾有此行 = 正常退出；没有 = 崩溃/强杀。
+        GuardShutdown();
     }
     return TRUE;
 }

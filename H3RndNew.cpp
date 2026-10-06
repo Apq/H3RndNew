@@ -18,6 +18,8 @@ PatcherInstance* _PI = nullptr;
 
 #include "modules/IniUtf8.inc.cpp"
 #include "modules/ConfigLog.inc.cpp"
+// 崩溃防御（CrashGuard，见 modules/CrashGuard.hpp 头注释 / 技能 h3-plugin-crash-guard）。
+#include "modules/CrashGuard.hpp"
 #include "modules/RandomAudit.inc.cpp"
 #include "modules/TrueRandom.inc.cpp"
 #include "modules/SettingsDialog.inc.cpp"

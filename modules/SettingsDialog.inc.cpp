@@ -523,41 +523,48 @@ static bool IsModifierScan_(int scan)
         || scan == 0x5B || scan == 0x5C;           // L/R-Win
 }
 
+// 本模块的钩子 id（文件在 CrashGuard.hpp 之后包含）。
+static const int GUARD_KEY_MSG = GuardRegisterHook_("KeyMsgProc");
+
+// 铠甲（CrashGuard L2）：热键判定/设置窗侦听段 __try，异常安全默认 =
+// 放行原函数；原函数调用在 __try 之外（游戏自身崩溃不吞）。
 static bool __stdcall OnKeyMsg_(HiHook* hook, void* hwnd, UINT msg,
     UINT32 wp, UINT32 lp)
 {
-    (void)wp;
-    const bool key_down = (msg == 0x100);
-    const int scan = (int)((lp >> 16) & 0xFF);
+    bool handled = false;
+    __try {
+        (void)wp;
+        const bool key_down = (msg == 0x100);
+        const int scan = (int)((lp >> 16) & 0xFF);
 
-    if (s_settings_dlg_running_) {
-        if (key_down && s_listen_new_hotkey_) {
-            if (scan == 1) { // ESC 取消修改
-                InterlockedExchange(&s_listen_new_hotkey_, 0);
-                if (s_active_dlg_) s_active_dlg_->OnHotkeyChanged_();
-                LogInfo("真随机: 热键修改取消");
-            } else if (!IsModifierScan_(scan)) {
-                char name[32];
-                ScanToName_(scan, name, sizeof(name));
-                g_settings_hotkey_scan = scan;
-                PersistHotkey_();
-                InterlockedExchange(&s_listen_new_hotkey_, 0);
-                if (s_active_dlg_) s_active_dlg_->OnHotkeyChanged_();
-                LogInfo("真随机: 设置热键改为 %s（扫描码 %d）", name, scan);
+        if (s_settings_dlg_running_) {
+            if (key_down && s_listen_new_hotkey_) {
+                if (scan == 1) { // ESC 取消修改
+                    InterlockedExchange(&s_listen_new_hotkey_, 0);
+                    if (s_active_dlg_) s_active_dlg_->OnHotkeyChanged_();
+                    LogInfo("真随机: 热键修改取消");
+                } else if (!IsModifierScan_(scan)) {
+                    char name[32];
+                    ScanToName_(scan, name, sizeof(name));
+                    g_settings_hotkey_scan = scan;
+                    PersistHotkey_();
+                    InterlockedExchange(&s_listen_new_hotkey_, 0);
+                    if (s_active_dlg_) s_active_dlg_->OnHotkeyChanged_();
+                    LogInfo("真随机: 设置热键改为 %s（扫描码 %d）", name, scan);
+                }
+                handled = true; // 侦听期间按键全部吞掉（修饰键继续侦听）
+            } else if (key_down && scan == g_settings_hotkey_scan) {
+                // 设置窗开着时，热键本身吞掉避免递归弹窗。
+                handled = true;
             }
-            return 0; // 侦听期间按键全部吞掉（修饰键继续侦听）
+        } else if (key_down && !(lp & 0x40000000) // 忽略按住自动重复
+            && scan == g_settings_hotkey_scan && InputMgrReady_()) {
+            OpenSettingsDialog_();
+            handled = true; // 该键已消费，不进游戏
         }
-        // 设置窗开着时，热键本身吞掉避免递归弹窗；其余交给窗/原函数。
-        if (key_down && scan == g_settings_hotkey_scan)
-            return 0;
-        return FASTCALL_4(bool, hook->GetDefaultFunc(), hwnd, msg, wp, lp);
-    }
+    } __except (GuardCrashFilter_(GUARD_KEY_MSG, GetExceptionInformation())) {}
 
-    if (key_down && !(lp & 0x40000000)   // 忽略按住自动重复
-        && scan == g_settings_hotkey_scan && InputMgrReady_()) {
-        OpenSettingsDialog_();
-        return 0; // 该键已消费，不进游戏
-    }
+    if (handled) return 0;
     return FASTCALL_4(bool, hook->GetDefaultFunc(), hwnd, msg, wp, lp);
 }
 

@@ -207,51 +207,69 @@ static void PlaceTrueRandomCheckbox_(H3SelectScenarioDialog* dlg,
 }
 
 
+// 本模块的钩子 id（静态初始化期注册；文件在 CrashGuard.hpp 之后包含）。
+static const int GUARD_SCENARIO_CTOR = GuardRegisterHook_("ScenarioDlgCtor");
+static const int GUARD_SCENARIO_PROC = GuardRegisterHook_("ScenarioDlgProc");
+static const int GUARD_START_GAME   = GuardRegisterHook_("StartGame");
+static const int GUARD_GAME_RAND    = GuardRegisterHook_("GameRand");
+static const int GUARD_CRT_RAND     = GuardRegisterHook_("CrtRand");
+
 // EXTENDED_ 把 this 和原参数都放进栈，替换函数统一 __stdcall。
+// 铠甲（CrashGuard L2）：前置拦截段与后置控件段各自 __try；原函数调用在
+// __try 之外（游戏自身崩溃不吞），异常安全默认 = 放行原函数。
 static int __stdcall OnScenarioProc_(HiHook* hook,
     H3SelectScenarioDialog* dlg, H3Msg* msg)
 {
-    if (msg && dlg
-        && msg->command == eMsgCommand::ITEM_COMMAND
-        && msg->subtype == eMsgSubtype::LBUTTON_DOWN)
-    {
-        H3DlgItem* clicked = dlg->GetH3DlgItem(
-            static_cast<UINT16>(msg->itemId));
-        const bool ours = clicked
-            && (clicked->GetID() == kCheckId_
-                || clicked->GetID() == kLabelHitId_);
-        const bool over_check = PointInside_(dlg->GetH3DlgItem(
-            static_cast<UINT16>(kCheckId_)), msg->GetX(), msg->GetY());
-        const bool over_label = PointInside_(dlg->GetH3DlgItem(
-            static_cast<UINT16>(kLabelHitId_)), msg->GetX(), msg->GetY());
-        if (ours || over_check || over_label) {
-            g_true_random = g_true_random ? 0 : 1;
-            PersistTrueRandom_();
-            ApplyCheckFrame_(dlg->GetDef(static_cast<UINT16>(kCheckId_)));
-            LogInfo("真随机: 勾选改为 %d，消息 id=%d",
-                g_true_random, msg->itemId);
-            return 1;
+    __try {
+        if (msg && dlg
+            && msg->command == eMsgCommand::ITEM_COMMAND
+            && msg->subtype == eMsgSubtype::LBUTTON_DOWN)
+        {
+            H3DlgItem* clicked = dlg->GetH3DlgItem(
+                static_cast<UINT16>(msg->itemId));
+            const bool ours = clicked
+                && (clicked->GetID() == kCheckId_
+                    || clicked->GetID() == kLabelHitId_);
+            const bool over_check = PointInside_(dlg->GetH3DlgItem(
+                static_cast<UINT16>(kCheckId_)), msg->GetX(), msg->GetY());
+            const bool over_label = PointInside_(dlg->GetH3DlgItem(
+                static_cast<UINT16>(kLabelHitId_)), msg->GetX(), msg->GetY());
+            if (ours || over_check || over_label) {
+                g_true_random = g_true_random ? 0 : 1;
+                PersistTrueRandom_();
+                ApplyCheckFrame_(dlg->GetDef(static_cast<UINT16>(kCheckId_)));
+                LogInfo("真随机: 勾选改为 %d，消息 id=%d",
+                    g_true_random, msg->itemId);
+                return 1;
+            }
         }
-    }
+    } __except (GuardCrashFilter_(GUARD_SCENARIO_PROC, GetExceptionInformation())) {}
+
     const int result = THISCALL_2(int, hook->GetDefaultFunc(), dlg, msg);
-    RefreshTrueRandomLabel_(dlg);
-    // 原函数处理完这条消息后再动控件列表，避免在它的遍历中途插入。
-    if (dlg && dlg != s_seen_dlg_) {
-        s_seen_dlg_ = dlg;
-        LogInventory_(dlg, "首消息");
-        PlaceTrueRandomCheckbox_(dlg, "首消息");
-    }
+
+    __try {
+        RefreshTrueRandomLabel_(dlg);
+        // 原函数处理完这条消息后再动控件列表，避免在它的遍历中途插入。
+        if (dlg && dlg != s_seen_dlg_) {
+            s_seen_dlg_ = dlg;
+            LogInventory_(dlg, "首消息");
+            PlaceTrueRandomCheckbox_(dlg, "首消息");
+        }
+    } __except (GuardCrashFilter_(GUARD_SCENARIO_PROC, GetExceptionInformation())) {}
     return result;
 }
 
+// 铠甲：原函数（构造）必须先执行；后置清单段 __try。
 static void __stdcall OnScenarioCtor_(HiHook* hook,
     H3SelectScenarioDialog* dlg, int mode)
 {
     THISCALL_2(void, hook->GetDefaultFunc(), dlg, mode);
-    s_seen_dlg_ = nullptr;
-    s_label_ = nullptr;
-    // 构造刚完，HD 的重排还没跑，这里只留一份清单做对照。
-    if (mode == 0) LogInventory_(dlg, "构造");
+    __try {
+        s_seen_dlg_ = nullptr;
+        s_label_ = nullptr;
+        // 构造刚完，HD 的重排还没跑，这里只留一份清单做对照。
+        if (mode == 0) LogInventory_(dlg, "构造");
+    } __except (GuardCrashFilter_(GUARD_SCENARIO_CTOR, GetExceptionInformation())) {}
 }
 
 // 是否处于替换态：全局模式全程替换（含开局窗口内）；否则仅开局窗口内
@@ -263,30 +281,40 @@ static bool InReplaceMode_(bool full)
 }
 
 // 游戏 Rand(lo, hi)。入口捕获开关；每条返回/SEH 异常路径均由 finally 完成审计。
+// 铠甲（CrashGuard L2）：替换判定/真随机取数段 __try，异常回退原版取数
+// （安全默认）；原函数调用仅被 __finally 审计覆盖，异常本身继续传播
+// （游戏自身崩溃不吞）。
 static int __stdcall OnGameRand_(HiHook* hook, int lo, int hi)
 {
     const bool full = g_true_random_full != 0;
     const bool replace = InReplaceMode_(full);
     RandomAuditOutcome_ outcome = kAuditAborted_;
     BeginRandomAudit_(0, full);
+    int result = 0;
     __try {
-        if (hi <= lo) {
-            const int result = FASTCALL_2(int, hook->GetDefaultFunc(), lo, hi);
-            outcome = kAuditNoDraw_;
-            return result;
-        }
-        if (replace) {
-            const int roll = NextTrue15_();
-            if (roll >= 0) {
-                CountReplacedRoll_();
-                if (!g_in_new_game_) CountFullReplacedRoll_();
-                outcome = kAuditTrue_;
-                return roll % (hi - lo + 1) + lo;
+        __try {
+            if (hi <= lo) {
+                result = FASTCALL_2(int, hook->GetDefaultFunc(), lo, hi);
+                outcome = kAuditNoDraw_;
+                return result;
             }
-        } else if (!g_in_new_game_) {
-            InterlockedIncrement(&g_outside_rand_calls_);
+            if (replace) {
+                const int roll = NextTrue15_();
+                if (roll >= 0) {
+                    CountReplacedRoll_();
+                    if (!g_in_new_game_) CountFullReplacedRoll_();
+                    outcome = kAuditTrue_;
+                    result = roll % (hi - lo + 1) + lo;
+                    return result;
+                }
+            } else if (!g_in_new_game_) {
+                InterlockedIncrement(&g_outside_rand_calls_);
+            }
         }
-        const int result = FASTCALL_2(int, hook->GetDefaultFunc(), lo, hi);
+        __except (GuardCrashFilter_(GUARD_GAME_RAND, GetExceptionInformation())) {
+            // 插件逻辑异常：outcome 保持 kAuditAborted_，走下方原版回退。
+        }
+        result = FASTCALL_2(int, hook->GetDefaultFunc(), lo, hi);
         outcome = replace ? kAuditFallback_ : kAuditOriginal_;
         return result;
     }
@@ -296,25 +324,33 @@ static int __stdcall OnGameRand_(HiHook* hook, int lo, int hi)
 }
 
 // CRT _rand，返回 0..0x7FFF。与 Rand 入口分开计数，不将嵌套调用当两次独立取数。
+// 铠甲结构同 OnGameRand_。
 static int __stdcall OnCrtRand_(HiHook* hook)
 {
     const bool full = g_true_random_full != 0;
     const bool replace = InReplaceMode_(full);
     RandomAuditOutcome_ outcome = kAuditAborted_;
     BeginRandomAudit_(1, full);
+    int result = 0;
     __try {
-        if (replace) {
-            const int roll = NextTrue15_();
-            if (roll >= 0) {
-                CountReplacedRoll_();
-                if (!g_in_new_game_) CountFullReplacedRoll_();
-                outcome = kAuditTrue_;
-                return roll;
+        __try {
+            if (replace) {
+                const int roll = NextTrue15_();
+                if (roll >= 0) {
+                    CountReplacedRoll_();
+                    if (!g_in_new_game_) CountFullReplacedRoll_();
+                    outcome = kAuditTrue_;
+                    result = roll;
+                    return result;
+                }
+            } else if (!g_in_new_game_) {
+                InterlockedIncrement(&g_outside_crt_calls_);
             }
-        } else if (!g_in_new_game_) {
-            InterlockedIncrement(&g_outside_crt_calls_);
         }
-        const int result = CDECL_0(int, hook->GetDefaultFunc());
+        __except (GuardCrashFilter_(GUARD_CRT_RAND, GetExceptionInformation())) {
+            // 插件逻辑异常：outcome 保持 kAuditAborted_，走下方原版回退。
+        }
+        result = CDECL_0(int, hook->GetDefaultFunc());
         outcome = replace ? kAuditFallback_ : kAuditOriginal_;
         return result;
     }
@@ -323,31 +359,36 @@ static int __stdcall OnCrtRand_(HiHook* hook)
     }
 }
 
+// 铠甲：前置窗口状态段与后置汇总段各自 __try；原函数调用保持
+// "__try/__finally 归零"结构，异常继续传播（游戏自身崩溃不吞）。
 static int __stdcall OnStartGame_(HiHook* hook, int self)
 {
-    // 报告上一窗口结束至今窗口外的取数：非全局模式下都应只计数、不替换；
-    // 全局模式下窗口外调用已被替换，探针为零是预期，不说明走原版。
-    const LONG outside_rand = InterlockedExchange(&g_outside_rand_calls_, 0);
-    const LONG outside_crt = InterlockedExchange(&g_outside_crt_calls_, 0);
-    if (g_true_random_full)
-        LogInfo("真随机: 全局模式运行中，窗口外替换累计 %d 次；"
-            "窗口外探针原版 Rand=%d _rand=%d",
-            static_cast<int>(InterlockedExchange(&g_full_replaced_calls_, 0)),
-            static_cast<int>(outside_rand),
-            static_cast<int>(outside_crt));
-    else
-        LogInfo("真随机: 上一窗口外探针 Rand=%d _rand=%d（均为原版）",
-            static_cast<int>(outside_rand), static_cast<int>(outside_crt));
-    LogRandomAudit_("开始前");
-    // 若上次异常退出没归零，这里强制重置并留痕，防止泄漏殃及战斗取数。
-    const LONG leaked = InterlockedExchange(&g_in_new_game_, 1);
-    if (leaked != 0)
-        LogError("真随机: 上次开局窗口未归零(%d)，已强制重置", leaked);
-    InterlockedExchange(&g_replaced_count_, 0);
-    if (g_true_random_full)
-        LogInfo("真随机: 全局模式开启，开局窗口内外均走系统随机");
-    else if (g_true_random)
-        LogInfo("真随机: 开局取数已换成系统随机");
+    __try {
+        // 报告上一窗口结束至今窗口外的取数：非全局模式下都应只计数、不替换；
+        // 全局模式下窗口外调用已被替换，探针为零是预期，不说明走原版。
+        const LONG outside_rand = InterlockedExchange(&g_outside_rand_calls_, 0);
+        const LONG outside_crt = InterlockedExchange(&g_outside_crt_calls_, 0);
+        if (g_true_random_full)
+            LogInfo("真随机: 全局模式运行中，窗口外替换累计 %d 次；"
+                "窗口外探针原版 Rand=%d _rand=%d",
+                static_cast<int>(InterlockedExchange(&g_full_replaced_calls_, 0)),
+                static_cast<int>(outside_rand),
+                static_cast<int>(outside_crt));
+        else
+            LogInfo("真随机: 上一窗口外探针 Rand=%d _rand=%d（均为原版）",
+                static_cast<int>(outside_rand), static_cast<int>(outside_crt));
+        LogRandomAudit_("开始前");
+        // 若上次异常退出没归零，这里强制重置并留痕，防止泄漏殃及战斗取数。
+        const LONG leaked = InterlockedExchange(&g_in_new_game_, 1);
+        if (leaked != 0)
+            LogError("真随机: 上次开局窗口未归零(%d)，已强制重置", leaked);
+        InterlockedExchange(&g_replaced_count_, 0);
+        if (g_true_random_full)
+            LogInfo("真随机: 全局模式开启，开局窗口内外均走系统随机");
+        else if (g_true_random)
+            LogInfo("真随机: 开局取数已换成系统随机");
+    } __except (GuardCrashFilter_(GUARD_START_GAME, GetExceptionInformation())) {}
+
     int result = 0;
     __try {
         result = FASTCALL_1(int, hook->GetDefaultFunc(), self);
@@ -356,9 +397,11 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
         // SEH 异常穿透时也要归零，不能只靠正常返回路径。
         InterlockedExchange(&g_in_new_game_, 0);
     }
-    LogInfo("真随机: 开局取数窗口结束，共替换 %d 次",
-        static_cast<int>(g_replaced_count_));
-    LogRandomAudit_("开局结束");
+    __try {
+        LogInfo("真随机: 开局取数窗口结束，共替换 %d 次",
+            static_cast<int>(g_replaced_count_));
+        LogRandomAudit_("开局结束");
+    } __except (GuardCrashFilter_(GUARD_START_GAME, GetExceptionInformation())) {}
     return result;
 }
 
