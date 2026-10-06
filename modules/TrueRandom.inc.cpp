@@ -27,9 +27,11 @@ static const char kCheckHint_[] = "\xBF\xAA\xBE\xD6\xD5\xE6\xCB\xE6\xBB\xFA";
 // 只在点开始到建档返回之间为 1。战斗、菜单、走动中的取数看到的是 0。
 static volatile LONG g_in_new_game_ = 0;
 // 读档确认标记：0x5776E0（读取界面确认按钮，两处调用点均为读档确认）入口
-// 记 GetTickCount；新游戏必经的单人选图构造（加复选框处）清零。0x58BFB0
-// 是开始/装载共用的建档入口，入口时对象上的模式标志不可靠（15:48 实测
-// +0x37f/+0x65 均为 0 但实际在读档），只能靠这个标记区分读档。
+// 记 GetTickCount；清除有两处——0x58BFB0 建档入口读取时原子消费，以及任何
+// 一次选图对话框构造时（进入选图界面即意味着已离开读档流程，与构造模式
+// 无关、与复选框放置成败无关）。0x58BFB0 是开始/装载共用的建档入口，入口
+// 时对象上的模式标志不可靠（15:48 实测 +0x37f/+0x65 均为 0 但实际在读档），
+// 只能靠这个标记区分读档。生命周期纯事件驱动，不设时间窗。
 static volatile LONG g_load_confirm_tick_ = 0;
 // 本次开局窗口内真随机实际替换的次数，退出时落日志定位崩溃点。
 static volatile LONG g_replaced_count_ = 0;
@@ -204,9 +206,6 @@ static void PlaceTrueRandomCheckbox_(H3SelectScenarioDialog* dlg,
     RefreshTrueRandomLabel_(dlg);
     box->ParentRedraw();
     RefreshTrueRandomLabel_(dlg);
-    // 新游戏必经此处（单人选图界面）。读档确认标记在这里失效：
-    // 走到单人选图界面的用户要么是新游戏，要么已放弃刚才的读档。
-    InterlockedExchange(&g_load_confirm_tick_, 0);
     // 一次开框只留一条汇总；细节排查用 [Logging] MinLevel=debug 配合清单。
     LogInfo("真随机: [%s] 已加复选框 TrueRandom=%d（显示行 (%d,%d) %dx%d，"
         "勾选框 (%d,%d)，文字 visible=%d active=%d）",
@@ -277,6 +276,9 @@ static void __stdcall OnScenarioCtor_(HiHook* hook,
     __try {
         s_seen_dlg_ = nullptr;
         s_label_ = nullptr;
+        // 任何一次选图界面构造（新游戏/战役/读取，无论模式）都意味着用户
+        // 已离开上一次读档流程：无条件清读档确认标记，纯事件驱动无时间窗。
+        InterlockedExchange(&g_load_confirm_tick_, 0);
         // 构造刚完，HD 的重排还没跑，这里只留一份清单做对照。
         if (mode == 0) LogInventory_(dlg, "构造");
     } __except (GuardCrashFilter_(GUARD_SCENARIO_CTOR, GetExceptionInformation())) {}
@@ -393,19 +395,17 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
         // 的建档入口，但入口时对象上的模式标志不可靠——15:48 日志证实主菜单
         // 读档进入时 +0x37f 与 +0x65 均为 0（读档确认按钮 0x5776E0 把存档名
         // 发布到全局后，外层流程再调本函数，此时标志已不是读取界面当时的值）。
-        // 可靠判据是读档确认标记：0x5776E0 入口记时戳，新游戏必经的单人选图
-        // 构造（加复选框处）清零。读档不重掷存档世界（重建取数走原版 LCG，
-        // 保证读档一致性），只走审计，不开替换窗口。
+        // 可靠判据是读档确认标记：0x5776E0 入口置位，本入口原子消费，选图
+        // 对话框构造时清除（事件驱动，无时间窗）。读档不重掷存档世界（重建
+        // 取数走原版 LCG，保证读档一致性），只走审计，不开替换窗口。
         const BOOL load_flag = *(char*)(self + 0x37f) != 0;
         const LONG confirm_tick = InterlockedExchange(&g_load_confirm_tick_, 0);
-        const BOOL confirm_recent = confirm_tick != 0
-            && GetTickCount() - confirm_tick < 60000;
-        is_load_game = load_flag || confirm_recent;
+        const BOOL confirm_pending = confirm_tick != 0;
+        is_load_game = load_flag || confirm_pending;
         // 诊断：一次进入把全部判据落盘，读档误判时可直接归因。
-        LogInfo("真随机: 建档入口判据 +0x37f=%d 读档确认=%d(age=%dms) → %s",
+        LogInfo("真随机: 建档入口判据 +0x37f=%d 读档确认=%d → %s",
             load_flag ? 1 : 0,
-            confirm_recent ? 1 : 0,
-            confirm_tick != 0 ? static_cast<int>(GetTickCount() - confirm_tick) : -1,
+            confirm_pending ? 1 : 0,
             is_load_game ? "读档" : "新游戏");
         // 报告上一窗口结束至今窗口外的取数：非全局模式下都应只计数、不替换；
         // 全局模式下窗口外调用已被替换，探针为零是预期，不说明走原版。
