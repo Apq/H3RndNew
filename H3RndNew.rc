@@ -15,8 +15,8 @@ LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
 //
 
 IDR_VERSIONINFO VERSIONINFO
- FILEVERSION 0,2,2026,1006
- PRODUCTVERSION 0,2,2026,1006
+ FILEVERSION 0,3,2026,1006
+ PRODUCTVERSION 0,3,2026,1006
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -34,12 +34,12 @@ BEGIN
             VALUE "Comments", "真随机"
             VALUE "CompanyName", "Apq"
             VALUE "FileDescription", "真随机"
-            VALUE "FileVersion", "0.2.2026.1006"
+            VALUE "FileVersion", "0.3.2026.1006"
             VALUE "InternalName", "H3RndNew"
             VALUE "LegalCopyright", "Copyright (C) Apq"
             VALUE "OriginalFilename", "H3RndNew.dll"
             VALUE "ProductName", "真随机"
-            VALUE "ProductVersion", "0.2.2026.1006"
+            VALUE "ProductVersion", "0.3.2026.1006"
         END
     END
     BLOCK "VarFileInfo"

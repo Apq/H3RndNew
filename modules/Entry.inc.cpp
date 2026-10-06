@@ -77,7 +77,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved)
         GuardSetLogPathW(g_log_path_w);
         InstallCrashGuard();
 
-        LogInfo("真随机 loading.");
+        LogDebug("真随机 loading.");
         _P = GetPatcher();
         if (!_P) { LogError("GetPatcher failed."); return TRUE; }
         _PI = _P->CreateInstance("HD.Plugin.H3RndNew");
@@ -93,7 +93,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved)
         ReadConfig();
         StartPlugin();
     } else if (reason == DLL_PROCESS_DETACH) {
-        // 判读生死标记：日志末尾有此行 = 正常退出；没有 = 崩溃/强杀。
+        // 收尾证据；缺失需结合进程状态/异常报告，不能单凭缺行归因崩溃。
         GuardShutdown();
     }
     return TRUE;

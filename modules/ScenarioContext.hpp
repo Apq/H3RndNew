@@ -5,15 +5,15 @@ enum ScenarioContext_ : LONG {
     kScenarioUnknown_ = 0,
     kScenarioNewGame_,
     kScenarioLoad_,
-    kScenarioCampaign_
+    kScenarioSave_
 };
 
 static volatile LONG g_scenario_context_ = kScenarioUnknown_;
 
-static ScenarioContext_ ClassifyScenarioContext_(bool campaign, bool loading)
+static ScenarioContext_ ClassifyScenarioContext_(bool loading, bool saving)
 {
     if (loading) return kScenarioLoad_;
-    if (campaign) return kScenarioCampaign_;
+    if (saving) return kScenarioSave_;
     return kScenarioNewGame_;
 }
 

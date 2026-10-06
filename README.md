@@ -84,4 +84,4 @@ MinLevel=info
 
 `TrueRandom` 是界面没有读到玩家配置时的出厂勾选，`0` 不勾，`1` 勾上。`TrueRandomFull` 是全局真随机（设置窗里切换，`1` 全程替换）。`SettingsHotkeyScan` 是设置窗热键的扫描码（默认 87=F11；F1..F10=59..68，A..Z=30..55，F12=88 勿用）。后两项在游戏内设置窗里改过之后以 user 层为准，不要手改 default。
 
-日志写在插件自己的目录，文件名是 `H3RndNew_日期_时间.log`。`DisableLog=1` 完全不写。`MinLevel` 可选 `trace`、`debug`、`info`、`warn`、`error`。运行期间的 `RNG审计[…]` 行按入口分类汇总全部随机调用（真随机/原版路径/失败回退等），读法与复测步骤见 `使用说明.txt`。
+日志写在插件自己的目录，文件名是 `H3RndNew_日期_时间.log`。`DisableLog=1` 完全不写。`MinLevel` 可选 `trace`、`debug`、`info`、`warn`、`error`。运行期间的 `RNG审计[…]` 行按入口分类汇总全部随机调用（真随机/原版路径/失败回退等）。Info 保留关键边界快照及有调用时每 5 分钟的心跳，Debug 每 30 秒最多一组心跳、只列关键控件，完整控件清单留给 Trace；未启用且无历史数据的全局空统计省略。Hook 链首次/变化详情和故障诊断仍保留。读法与复测步骤见 `使用说明.txt`。

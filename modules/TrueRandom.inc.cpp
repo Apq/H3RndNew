@@ -26,7 +26,11 @@ static const char kCheckHint_[] = "\xBF\xAA\xBE\xD6\xD5\xE6\xCB\xE6\xBB\xFA";
 // 只在点开始到建档返回之间为 1。战斗、菜单、走动中的取数看到的是 0。
 static volatile LONG g_in_new_game_ = 0;
 // 界面上下文由构造和原消息处理前的字段快照更新；建档入口一次消费。
-// 只有明确的新游戏上下文允许开局替换，未知/读取/战役均走原版。
+// 只有明确的新游戏上下文允许开局替换，未知/读取/保存均走原版。
+static_assert(offsetof(H3SelectScenarioDialog, isCampaignMaybe) == 0x64,
+    "SoD scenario load flag offset");
+static_assert(offsetof(H3SelectScenarioDialog, isLoadingMaybe) == 0x65,
+    "SoD scenario save flag offset");
 #include "ScenarioContext.hpp"
 
 static const char* ScenarioContextName_(ScenarioContext_ context)
@@ -34,7 +38,7 @@ static const char* ScenarioContextName_(ScenarioContext_ context)
     switch (context) {
     case kScenarioNewGame_: return "新游戏";
     case kScenarioLoad_: return "读档";
-    case kScenarioCampaign_: return "战役";
+    case kScenarioSave_: return "保存";
     default: return "未知";
     }
 }
@@ -46,24 +50,82 @@ static volatile LONG g_outside_crt_calls_ = 0;  // 0x61842C _rand
 // 全局模式下「开局窗口外」被真随机替换的次数：全局生效的直接证据。
 static volatile LONG g_full_replaced_calls_ = 0;
 
-// 全局模式下窗口外替换累计到一定量级留一条日志，证明全程替换在跑。
+// 保留分段计数，进度输出统一由完整审计心跳负责。
 static void CountFullReplacedRoll_()
 {
-    const LONG n = InterlockedIncrement(&g_full_replaced_calls_);
-    if ((n & 0x3FFFF) == 0) // 每 26 万次一条，避免刷屏
-        LogInfo("真随机: 窗口外替换分段累计 %d 次",
-            static_cast<int>(n));
+    InterlockedIncrement(&g_full_replaced_calls_);
 }
 
 // 完整入口审计定义在 RandomAudit.inc.cpp；必须在安装 RNG Hook 前初始化。
+// Compare bounded read-only snapshots; unchanged chains need no repeated dump.
+struct RngPatchSnapshot_ {
+    UINT32 patch;
+    int type;
+    UINT32 default_func;
+    UINT32 original_func;
+    char owner[128];
+};
+struct RngChainSnapshot_ {
+    BYTE bytes[5];
+    int count;
+    UINT32 remaining;
+    RngPatchSnapshot_ patches[16];
+};
+static RngChainSnapshot_ g_rng_chain_snapshot_[2] = {};
+static bool g_rng_chain_seen_[2] = {};
 
-// 保留旧替换进度；完整入口心跳由 EndRandomAudit_ 独立驱动，原版路径也有汇总。
+static void CaptureRngHookChain_(UINT32 address, RngChainSnapshot_& current)
+{
+    memset(&current, 0, sizeof(current));
+    memcpy(current.bytes, reinterpret_cast<const void*>(address), sizeof(current.bytes));
+    Patch* patch = _P->GetFirstPatchAt(address);
+    while (patch && current.count < 16) {
+        RngPatchSnapshot_& p = current.patches[current.count++];
+        p.patch = reinterpret_cast<UINT32>(patch);
+        p.type = patch->GetType();
+        HiHook* hi = p.type == HIHOOK_ ? static_cast<HiHook*>(patch) : nullptr;
+        p.default_func = hi ? hi->GetDefaultFunc() : 0;
+        p.original_func = hi ? hi->GetOriginalFunc() : 0;
+        const char* owner = patch->GetOwner();
+        _snprintf(p.owner, sizeof(p.owner) - 1, "%s", owner ? owner : "?");
+        patch = patch->GetAppliedAfter();
+    }
+    current.remaining = reinterpret_cast<UINT32>(patch);
+}
+
+static void LogRngHookChain_(const char* phase)
+{
+    if (g_disable_log || g_log_level > LOG_INFO) return;
+    const UINT32 addresses[2] = { kGameRand_, kCrtRand_ };
+    bool changed = false;
+    for (int entry = 0; entry < 2; ++entry) {
+        const UINT32 address = addresses[entry];
+        RngChainSnapshot_ current = {};
+        CaptureRngHookChain_(address, current);
+        if (g_rng_chain_seen_[entry]
+            && memcmp(&current, &g_rng_chain_snapshot_[entry], sizeof(current)) == 0) continue;
+        changed = true;
+        LogInfo("真随机: RNG链[%s][%s] 入口=0x%08X 字节=%02X %02X %02X %02X %02X",
+            phase, g_rng_chain_seen_[entry] ? "变化" : "首次", address,
+            current.bytes[0], current.bytes[1], current.bytes[2], current.bytes[3], current.bytes[4]);
+        for (int i = 0; i < current.count; ++i) {
+            const RngPatchSnapshot_& p = current.patches[i];
+            LogInfo("真随机: RNG链[%s] 入口=0x%08X 序=%d 所有者=%s 类型=%d "
+                "default=0x%08X original=0x%08X", phase, address, i, p.owner,
+                p.type, p.default_func, p.original_func);
+        }
+        if (current.remaining)
+            LogWarn("真随机: RNG链[%s] 入口=0x%08X 超过16项，快照截断", phase, address);
+        g_rng_chain_snapshot_[entry] = current;
+        g_rng_chain_seen_[entry] = true;
+    }
+    if (!changed) LogDebug("真随机: RNG链[%s] 两入口未变化（沿用前次快照）", phase);
+}
+
+// 窗口总数仍在结束时输出，不重复打印按调用次数触发的进度。
 static void CountReplacedRoll_()
 {
-    const LONG n = InterlockedIncrement(&g_replaced_count_);
-    if ((n & 0xFFFF) == 0) {
-        LogInfo("真随机: 已替换 %d 次", static_cast<int>(n));
-    }
+    InterlockedIncrement(&g_replaced_count_);
 }
 
 static void PersistTrueRandom_()
@@ -74,7 +136,8 @@ static void PersistTrueRandom_()
         LogError("真随机: 写入 user.ini 失败");
 }
 
-// 取 0..0x7FFF。失败返回 -1，调用方退回原版伪随机。
+// 取 0..0x7FFF。失败返回 -1；持续故障按倍增累计报告，审计仍逐次计数。
+static volatile LONG g_true_rng_failures_ = 0;
 static int NextTrue15_()
 {
     UINT32 value = 0;
@@ -82,8 +145,10 @@ static int NextTrue15_()
         reinterpret_cast<PUCHAR>(&value), sizeof(value),
         BCRYPT_USE_SYSTEM_PREFERRED_RNG);
     if (status < 0) {
-        LogError("真随机: BCryptGenRandom 失败 status=0x%08X",
-            static_cast<unsigned>(status));
+        const ULONG count = static_cast<ULONG>(InterlockedIncrement(&g_true_rng_failures_));
+        if (count && (count & (count - 1u)) == 0)
+            LogError("真随机: BCryptGenRandom 失败 status=0x%08X 累计=%lu（倍增汇总）",
+                static_cast<unsigned>(status), count);
         return -1;
     }
     return static_cast<int>(value & 0x7FFFu);
@@ -107,19 +172,23 @@ static bool PointInside_(H3DlgItem* item, int x, int y)
         && y < item->GetAbsoluteY() + item->GetHeight();
 }
 
-// 记下当前对话框全部控件的 id、位置、尺寸、资源和提示字节。
-// 提示按 GBK 十六进制打印（「显示」是 CF D4 CA BE），用来认出
-// 玩家看到的那颗「显示可选场景」按钮到底是哪个控件。
+// Debug 只保留布局锚点、模式按钮和自有控件；Trace 才展开完整清单。
+// 两个阶段仍可对照 HD 重排；提示按 GBK 十六进制记录。
 static void LogInventory_(H3SelectScenarioDialog* dlg, const char* phase)
 {
-    if (!dlg) return;
+    if (!dlg || g_disable_log || g_log_level > LOG_DEBUG) return;
     H3DlgItem** const items = dlg->GetList().begin();
     const int count = static_cast<int>(dlg->GetList().Count());
-    // 排查期工具：600+ 行/次，降到 debug 级，默认 MinLevel=info 不落盘。
-    LogDebug("真随机: [%s] 控件清单共 %d 项", phase, count);
+    const bool complete = g_log_level == LOG_TRACE;
+    LogDebug("真随机: [%s] 控件共 %d 项，输出=%s", phase, count,
+        complete ? "完整(trace)" : "关键(debug)");
     for (int i = 0; i < count; ++i) {
         H3DlgItem* item = items[i];
         if (!item) continue;
+        const int id = item->GetID();
+        const bool key = (id >= 128 && id <= 131) || id == 186 || id == 335
+            || id == kCheckId_ || id == kLabelId_ || id == kLabelHitId_;
+        if (!complete && !key) continue;
         const UINT32 vt = *reinterpret_cast<UINT32*>(item);
         const char* asset = "?";
         if (vt == H3DlgDef::VTABLE && item->Cast<H3DlgDef>()->GetDef())
@@ -136,7 +205,8 @@ static void LogInventory_(H3SelectScenarioDialog* dlg, const char* phase)
                 _snprintf(hintHex + j * 3, sizeof(hintHex) - j * 3,
                     "%02X ", hint[j]);
         }
-        LogDebug("真随机: [%s] id=%d (%d,%d) %dx%d vt=0x%08X %s 提示=%s",
+        auto log = complete ? &LogTrace : &LogDebug;
+        log("真随机: [%s] id=%d (%d,%d) %dx%d vt=0x%08X %s 提示=%s",
             phase, item->GetID(), item->GetX(), item->GetY(),
             item->GetWidth(), item->GetHeight(), vt, asset, hintHex);
     }
@@ -286,10 +356,11 @@ static int __stdcall OnScenarioProc_(HiHook* hook,
 }
 
 // 铠甲：原函数（构造）必须先执行；后置清单段 __try。
-static void __stdcall OnScenarioCtor_(HiHook* hook,
+static H3SelectScenarioDialog* __stdcall OnScenarioCtor_(HiHook* hook,
     H3SelectScenarioDialog* dlg, int mode)
 {
-    THISCALL_2(void, hook->GetDefaultFunc(), dlg, mode);
+    H3SelectScenarioDialog* const result = THISCALL_2(H3SelectScenarioDialog*,
+        hook->GetDefaultFunc(), dlg, mode);
     __try {
         s_seen_dlg_ = nullptr;
         s_label_ = nullptr;
@@ -303,6 +374,7 @@ static void __stdcall OnScenarioCtor_(HiHook* hook,
         // 构造刚完，HD 的重排还没跑，这里只留一份清单做对照。
         if (mode == 0) LogInventory_(dlg, "构造");
     } __except (GuardCrashFilter_(GUARD_SCENARIO_CTOR, GetExceptionInformation())) {}
+    return result;
 }
 
 // 是否处于替换态：全局模式全程替换（含开局窗口内）；否则仅开局窗口内
@@ -326,12 +398,7 @@ static int __stdcall OnGameRand_(HiHook* hook, int lo, int hi)
     int result = 0;
     __try {
         __try {
-            if (hi <= lo) {
-                result = FASTCALL_2(int, hook->GetDefaultFunc(), lo, hi);
-                outcome = kAuditNoDraw_;
-                return result;
-            }
-            if (replace) {
+            if (hi > lo && replace) {
                 const int roll = NextTrue15_();
                 if (roll >= 0) {
                     CountReplacedRoll_();
@@ -340,7 +407,7 @@ static int __stdcall OnGameRand_(HiHook* hook, int lo, int hi)
                     result = roll % (hi - lo + 1) + lo;
                     return result;
                 }
-            } else if (!g_in_new_game_) {
+            } else if (hi > lo && !g_in_new_game_) {
                 InterlockedIncrement(&g_outside_rand_calls_);
             }
         }
@@ -348,7 +415,8 @@ static int __stdcall OnGameRand_(HiHook* hook, int lo, int hi)
             // 插件逻辑异常：outcome 保持 kAuditAborted_，走下方原版回退。
         }
         result = FASTCALL_2(int, hook->GetDefaultFunc(), lo, hi);
-        outcome = replace ? kAuditFallback_ : kAuditOriginal_;
+        outcome = hi <= lo ? kAuditNoDraw_
+            : (replace ? kAuditFallback_ : kAuditOriginal_);
         return result;
     }
     __finally {
@@ -420,6 +488,7 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
         else
             LogInfo("真随机: 上一窗口外探针 Rand=%d _rand=%d（均为原版）",
                 static_cast<int>(outside_rand), static_cast<int>(outside_crt));
+        LogRngHookChain_("建档前");
         LogRandomAudit_(context == kScenarioLoad_ ? "读档开始前" : "开始前");
         if (!allow_window) {
             LogInfo("真随机: %s路径，开局窗口跳过（全局档仍按其开关运行）",
@@ -429,13 +498,15 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
                 LogInfo("真随机: 全局模式开启，开局窗口内外均走系统随机");
             else if (g_true_random) {
                 LogInfo("真随机: 开局取数已换成系统随机");
-                // 仅作源输出诊断，不参与游戏取数，不能据此证明地形生成路径。
-                const int sample0 = NextTrue15_();
-                const int sample1 = NextTrue15_();
-                const int sample2 = NextTrue15_();
-                const int sample3 = NextTrue15_();
-                LogInfo("真随机: 系统随机15位采样 %04X %04X %04X %04X",
-                    sample0, sample1, sample2, sample3);
+                // Debug 源采样不参与游戏取数，不能证明地形生成路径。
+                if (!g_disable_log && g_log_level <= LOG_DEBUG) {
+                    const int sample0 = NextTrue15_();
+                    const int sample1 = NextTrue15_();
+                    const int sample2 = NextTrue15_();
+                    const int sample3 = NextTrue15_();
+                    LogDebug("真随机: 系统随机15位采样 %04X %04X %04X %04X",
+                        sample0, sample1, sample2, sample3);
+                }
             }
             InterlockedExchange(&g_in_new_game_, 1);
         }
@@ -450,6 +521,7 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
         InterlockedExchange(&g_in_new_game_, 0);
     }
     __try {
+        LogRngHookChain_("建档后");
         if (!allow_window) {
             LogInfo("真随机: %s进入完成，开局窗口未启用", ScenarioContextName_(context));
             LogRandomAudit_(context == kScenarioLoad_ ? "读档结束" : "窗口跳过结束");
@@ -469,11 +541,14 @@ static void InstallTrueRandomHooks_()
         reinterpret_cast<void*>(&OnScenarioCtor_));
     _PI->WriteHiHook(kScenarioDlgProc_, SPLICE_, EXTENDED_, THISCALL_,
         reinterpret_cast<void*>(&OnScenarioProc_));
-    _PI->WriteHiHook(kStartGame_, SPLICE_, EXTENDED_, FASTCALL_,
+    // EXTENDED_ FASTCALL_ marshals ECX and EDX; this entry only has ECX.
+    _PI->WriteHiHook(kStartGame_, SPLICE_, EXTENDED_, THISCALL_,
         reinterpret_cast<void*>(&OnStartGame_));
     _PI->WriteHiHook(kGameRand_, SPLICE_, EXTENDED_, FASTCALL_,
         reinterpret_cast<void*>(&OnGameRand_));
-    _PI->WriteHiHook(kCrtRand_, SPLICE_, EXTENDED_, CDECL_,
+    // This patcher CDECL_ bridge restores EAX after the callback. With zero
+    // arguments STDCALL_ has identical stack cleanup and preserves the result.
+    _PI->WriteHiHook(kCrtRand_, SPLICE_, EXTENDED_, STDCALL_,
         reinterpret_cast<void*>(&OnCrtRand_));
     LogInfo("真随机: Hook 已安装；RNG审计 v2，统计 Rand/_rand 每次入口及结果，"
         "全局期间单列，不覆盖绕过入口的其它模块私有 RNG；原版路径不保证 HD Hook 链的内部算法");

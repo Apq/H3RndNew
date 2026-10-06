@@ -8,6 +8,8 @@
 #include <stdarg.h>
 #include <wchar.h>
 #include <stdint.h>
+#include <cstddef>
+#include <initializer_list>
 #include <bcrypt.h>
 #pragma comment(lib, "bcrypt.lib")
 
