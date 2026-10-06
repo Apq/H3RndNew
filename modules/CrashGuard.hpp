@@ -323,13 +323,13 @@ static bool GuardVerifySodBytes_()
 {
     bool ok = false;
     __try {
-        const WORD n2 = *reinterpret_cast<const WORD*>(0x63CF1A);
-        const signed char c2a = *reinterpret_cast<const signed char*>(0x63CF1C);
-        const signed char c2b = *reinterpret_cast<const signed char*>(0x63CF1D);
-        const WORD n3 = *reinterpret_cast<const WORD*>(0x63CF2C + 2);
-        const signed char c3a = *reinterpret_cast<const signed char*>(0x63CF2C + 4);
-        const signed char c3b = *reinterpret_cast<const signed char*>(0x63CF2C + 5);
-        const signed char c3c = *reinterpret_cast<const signed char*>(0x63CF2C + 6);
+        const WORD n2 = *reinterpret_cast<const WORD*>(0x63CF18 + 0x06);
+        const signed char c2a = *reinterpret_cast<const signed char*>(0x63CF18 + 0x08);
+        const signed char c2b = *reinterpret_cast<const signed char*>(0x63CF18 + 0x09);
+        const WORD n3 = *reinterpret_cast<const WORD*>(0x63CF2C + 0x06);
+        const signed char c3a = *reinterpret_cast<const signed char*>(0x63CF2C + 0x08);
+        const signed char c3b = *reinterpret_cast<const signed char*>(0x63CF2C + 0x09);
+        const signed char c3c = *reinterpret_cast<const signed char*>(0x63CF2C + 0x0A);
         const char* def2 = reinterpret_cast<const char*>(
             *reinterpret_cast<const uintptr_t*>(0x63CF18 + 0x10));
         const char* def3 = reinterpret_cast<const char*>(

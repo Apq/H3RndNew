@@ -98,9 +98,10 @@ struct Ring {
 
 // ---- SoD 数据指纹（版本门卫）----
 // 力场（大力神盾）障碍信息表是 SoD 特有的静态数据（实测：
-//   0x63CF18: +0x02 WORD numSquares=2, +0x04 起 signed char 格 {0,-16}，
+//   0x63CF18: +0x00 DWORD 保留, +0x04 两个前导 char, +0x06 WORD numSquares=2,
+//             +0x08 起 signed char 格 {0,-16}，
 //             +0x10 char* -> "C15spE1.def"；
-//   0x63CF2C: numSquares=3, 格 {0,-16,-34}, -> "C15spE10.def"）。
+//   0x63CF2C: 同布局 numSquares=3, 格 {0,-16,-34}, -> "C15spE10.def"）。
 // 完整版/HotA/改版 exe 不可能同时吻合全部特征值。
 // def2/def3 为运行时从表内指针读出的字符串（可为 nullptr，读取方负责
 // 保证解引用安全）。
