@@ -11,7 +11,7 @@ Add-Type -AssemblyName System.Text.Encoding.CodePages -ErrorAction SilentlyConti
 [System.Text.Encoding]::RegisterProvider([System.Text.CodePagesEncodingProvider]::Instance)
 
 if (-not $Source) {
-    $Source = 'D:\Heroes3\Heroes3_2026.05.01\_HD3_Data\Packs\真随机开局'
+    $Source = 'D:\Heroes3\Heroes3_2026.10.07\_HD3_Data\Packs\真随机开局'
 }
 if (-not $OutputDir) {
     $OutputDir = Join-Path $PSScriptRoot 'Release'

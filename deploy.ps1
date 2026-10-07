@@ -1,5 +1,5 @@
 ﻿$ErrorActionPreference = 'Stop'
-$gameDir = 'D:\Heroes3\Heroes3_2026.05.01'
+$gameDir = 'D:\Heroes3\Heroes3_2026.10.07'
 $packsDst = "$gameDir\_HD3_Data\Packs\真随机开局"
 $src = "$PSScriptRoot\Release"
 
