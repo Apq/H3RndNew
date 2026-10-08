@@ -245,6 +245,15 @@ static void PlaceTrueRandomCheckbox_(H3SelectScenarioDialog* dlg,
     }
     const int x = row->GetX() + row->GetWidth() + 4;
     const int y = row->GetY() + (row->GetHeight() - kCheckH_) / 2;
+    const int text_height = FontTextHeight_(kCheckH_, SmallFontHeight_());
+    const int text_y = row->GetY() + (row->GetHeight() - text_height) / 2;
+    H3DlgItem* next_row = dlg->GetH3DlgItem(130);
+    const int bottom = next_row ? next_row->GetY() : row->GetY() + row->GetHeight() + 4;
+    if (text_y < 0 || text_y + text_height > bottom
+        || x + kCheckW_ + kLabelGap_ + kLabelW_ > dlg->GetWidth()) {
+        LogWarn("真随机: 小字体行高 %d 超出选图标签可用布局，未添加勾选控件", SmallFontHeight_());
+        return;
+    }
     // 与 HD「其它选项」相同：ChkBlue.def 静态图，点击在 0x0C 消息里翻转。
     H3DlgDef* box = H3DlgDef::Create(x, y, kCheckW_, kCheckH_,
         kCheckId_, "ChkBlue.def",
@@ -258,7 +267,7 @@ static void PlaceTrueRandomCheckbox_(H3SelectScenarioDialog* dlg,
     box->Draw();
     // 透明点击区先加（更高层），文字在上面绘制，避免被点击区遮挡。
     H3DlgTransparentItem* hit = H3DlgTransparentItem::Create(
-        x + kCheckW_ + kLabelGap_, y, kLabelW_, kCheckH_, kLabelHitId_);
+        x + kCheckW_ + kLabelGap_, text_y, kLabelW_, text_height, kLabelHitId_);
     if (!hit) {
         LogError("真随机: 创建文字点击区失败");
         return;
@@ -266,8 +275,8 @@ static void PlaceTrueRandomCheckbox_(H3SelectScenarioDialog* dlg,
     hit->SetHint(kCheckHint_);
     dlg->AddItem(hit);
 
-    H3DlgText* label = H3DlgText::Create(x + kCheckW_ + kLabelGap_, y,
-        kLabelW_, kCheckH_, kCheckHint_, "smalfont.fnt",
+    H3DlgText* label = H3DlgText::Create(x + kCheckW_ + kLabelGap_, text_y,
+        kLabelW_, text_height, kCheckHint_, "smalfont.fnt",
         1, kLabelId_, 4, 0);
     if (!label) {
         LogError("真随机: 创建文字失败");

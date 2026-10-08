@@ -92,18 +92,12 @@ static const int kSdLogShieldId_ = 0x7E1C; // 展开时接管空白区域点击
 static const int kSdLogListBgId_ = 0x7E1D; // 展开列表底板和边框
 static const int kSdLogItem0Id_  = 0x7E20; // 展开列表项 0..4（五级）
 static const int kSdW_ = 340;
-static const int kSdH_ = 190;
 
-// 日志等级下拉：布局常量（收起框 / 展开列表）。行放在标题正下方，
-// 展开列表向下覆盖复选框/热键行，全部落在窗口内，无需加高窗口。
-static const int kSdLogRow_     = 44;    // 行 y（标签与收起框）
+// Horizontal geometry stays fixed; vertical geometry follows the loaded small font.
+// The default font retains the original 340x190 dialog and 20-pixel list pitch.
 static const int kSdLogDdX_     = 120;   // 第一行收起框 x
 static const int kSdLogDdW_     = 120;
-static const int kSdLogDdH_     = 24;
-static const int kSdLogItemH_   = 20;    // 展开列表单行高
 static const int kSdLogLevelCount_ = 5;  // trace/debug/info/warn/error
-static const int kSdLogListY_ = kSdLogRow_ + kSdLogDdH_ + 2;
-static const int kSdLogListH_ = kSdLogLevelCount_ * kSdLogItemH_ + 4;
 
 // 用游戏原生 16 位对话框图层绘制下拉框底板。这样底板是控件自身的
 // PCX，不会写入 vShow 保存的底图，也不会在关闭设置窗后残留。
@@ -166,19 +160,21 @@ struct SettingsDlg_ final : public H3Dlg
     H3DlgPcx16*     log_list_bg_ = nullptr; // 不透明列表浮层
     bool            log_dd_open_ = false;    // 下拉展开态
 
-    SettingsDlg_() : H3Dlg(kSdW_, kSdH_) {}
+    const SmallFontLayout_ layout_;
+
+    explicit SettingsDlg_(const SmallFontLayout_& layout)
+        : H3Dlg(kSdW_, layout.window_height), layout_(layout) {}
 
     BOOL OnCreate() override
     {
         char gbk[160];
-        H3DlgText* title = H3DlgText::Create(0, 12, kSdW_, 24,
+        H3DlgText* title = H3DlgText::Create(0, 12, kSdW_, layout_.text_height,
             Utf8ToGbk_("真随机 设置", gbk, sizeof(gbk)) ? gbk : "",
             "smalfont.fnt", 1, kSdTitleId_, 5, 0);
         if (title) AddItem(title);
 
-        // 日志等级行：放标题正下方，展开列表向下覆盖复选框/热键行，
-        // 全部落在窗口内，窗口保持 190 高。当前等级名由框架绘制。
-        H3DlgText* log_label = H3DlgText::Create(60, kSdLogRow_, 52, 24,
+        // Dropdown buffers, item pitch and hit testing share layout_.
+        H3DlgText* log_label = H3DlgText::Create(60, layout_.log_y, 52, layout_.text_height,
             Utf8ToGbk_("日志：", gbk, sizeof(gbk)) ? gbk : "",
             "smalfont.fnt", 5, kSdLogLabelId_, 4, 0);
         if (log_label) {
@@ -189,14 +185,14 @@ struct SettingsDlg_ final : public H3Dlg
             if (lv_hint_ok) log_label->SetHint(lv_hint_gbk);
             AddItem(log_label);
         }
-        log_dd_bg_ = CreateLogSurface_(kSdLogDdX_, kSdLogRow_,
-            kSdLogDdW_, kSdLogDdH_, kSdLogDdBgId_, true, true);
+        log_dd_bg_ = CreateLogSurface_(kSdLogDdX_, layout_.log_y,
+            kSdLogDdW_, layout_.text_height, kSdLogDdBgId_, true, true);
         if (log_dd_bg_) {
             log_dd_bg_->ShowActivate();
             AddItem(log_dd_bg_);
         }
-        log_dd_text_ = H3DlgText::Create(kSdLogDdX_ + 4, kSdLogRow_,
-            kSdLogDdW_ - 24, kSdLogDdH_, "",
+        log_dd_text_ = H3DlgText::Create(kSdLogDdX_ + 4, layout_.log_y,
+            kSdLogDdW_ - 24, layout_.text_height, "",
             "smalfont.fnt", 5, kSdLogDdId_, 5, 0);
         if (log_dd_text_) {
             char lv_hint_gbk[160];
@@ -209,12 +205,12 @@ struct SettingsDlg_ final : public H3Dlg
         }
 
         H3DlgText* arrow_hit = H3DlgText::Create(
-            kSdLogDdX_ + kSdLogDdW_ - 20, kSdLogRow_, 20, kSdLogDdH_,
+            kSdLogDdX_ + kSdLogDdW_ - 20, layout_.log_y, 20, layout_.text_height,
             "", "smalfont.fnt", 5, kSdLogArrowHitId_, 5, 0);
         if (arrow_hit) AddItem(arrow_hit);
 
         // 确定按钮：closeDialog=TRUE，点击自动关窗；Enter 等效。
-        H3DlgDefButton* ok = H3DlgDefButton::Create(138, 140, kSdOkId_,
+        H3DlgDefButton* ok = H3DlgDefButton::Create(138, layout_.ok_y, kSdOkId_,
             "iokay.def", 0, 1, TRUE, NH3VKey::H3VK_ENTER);
         if (ok) AddItem(ok);
 
@@ -226,7 +222,7 @@ struct SettingsDlg_ final : public H3Dlg
         char hint_gbk[160];
         const bool hint_ok = Utf8ToGbk_(kFullHint_, hint_gbk,
             sizeof(hint_gbk)) != 0;
-        check_box_ = H3DlgDefButton::Create(30, 84, kSdCheckId_,
+        check_box_ = H3DlgDefButton::Create(30, layout_.full_y, kSdCheckId_,
             NH3Dlg::Assets::ON_OFF_CHECKBOX, g_true_random_full ? 1 : 0,
             1 - (g_true_random_full ? 1 : 0), FALSE, 0);
         if (check_box_) {
@@ -235,7 +231,7 @@ struct SettingsDlg_ final : public H3Dlg
         } else {
             LogError("真随机: 设置窗创建勾选框失败");
         }
-        H3DlgText* full_label = H3DlgText::Create(68, 84, 112, 24,
+        H3DlgText* full_label = H3DlgText::Create(68, layout_.full_y, 112, layout_.text_height,
             Utf8ToGbk_("全局真随机", gbk, sizeof(gbk)) ? gbk : "",
             "smalfont.fnt", 1, kSdCheckHitId_, 4, 0);
         if (full_label) {
@@ -244,7 +240,7 @@ struct SettingsDlg_ final : public H3Dlg
         }
 
         // 热键行：说明文字 + 原生文字/PCX 组合控件。
-        H3DlgText* key_label = H3DlgText::Create(192, 84, 44, 24,
+        H3DlgText* key_label = H3DlgText::Create(192, layout_.full_y, 44, layout_.text_height,
             Utf8ToGbk_("热键：", gbk, sizeof(gbk)) ? gbk : "",
             "smalfont.fnt", 5, kSdKeyHintId_, 4, 0);
         if (key_label) {
@@ -257,11 +253,12 @@ struct SettingsDlg_ final : public H3Dlg
         }
         // 下沉边缘画在独立底板上，隐藏热键时不会留下背景中的凹槽。
         if (H3LoadedPcx16* bg = GetBackgroundPcx()) {
-            H3LoadedPcx16* pcx = H3LoadedPcx16::Create("", 70, 30);
+            H3LoadedPcx16* pcx = H3LoadedPcx16::Create("", 70, layout_.text_height + 6);
             if (pcx) {
-                pcx->CopyRegion(bg, 238, 80);
-                pcx->SinkArea(0, 0, 70, 30);
-                H3DlgPcx16* frame = H3DlgPcx16::Create(238, 80, 70, 30,
+                pcx->CopyRegion(bg, 238, layout_.full_y - 4);
+                pcx->SinkArea(0, 0, 70, layout_.text_height + 6);
+                H3DlgPcx16* frame = H3DlgPcx16::Create(238, layout_.full_y - 4,
+                    70, layout_.text_height + 6,
                     kSdKeyFrameId_, nullptr);
                 if (frame) {
                     frame->SetPcx(pcx);
@@ -277,7 +274,8 @@ struct SettingsDlg_ final : public H3Dlg
         ScanToName_(g_settings_hotkey_scan, initial_key_utf8,
             sizeof(initial_key_utf8));
         Utf8ToGbk_(initial_key_utf8, initial_key_gbk, sizeof(initial_key_gbk));
-        key_name_ = H3DlgText::Create(240, 84, 66, 24, initial_key_gbk,
+        key_name_ = H3DlgText::Create(240, layout_.full_y, 66, layout_.text_height,
+            initial_key_gbk,
             "smalfont.fnt", 5, kSdKeyNameId_, 5);
         if (key_name_) {
             char key_hint_gbk[160];
@@ -287,7 +285,7 @@ struct SettingsDlg_ final : public H3Dlg
             if (key_hint_ok) key_name_->SetHint(key_hint_gbk);
             AddItem(key_name_);
         }
-        H3DlgText* shield = H3DlgText::Create(0, 0, kSdW_, kSdH_,
+        H3DlgText* shield = H3DlgText::Create(0, 0, kSdW_, layout_.window_height,
             "", "smalfont.fnt", 5, kSdLogShieldId_, 5, 0);
         if (shield) {
             shield->HideDeactivate();
@@ -296,8 +294,8 @@ struct SettingsDlg_ final : public H3Dlg
 
         // 展开列表浮层：不透明深棕底 + 金色边框，默认隐藏。它先加入，
         // 后面的选项文字自然绘制在底板之上；整个浮层不会透出下方控件。
-        log_list_bg_ = CreateLogSurface_(kSdLogDdX_, kSdLogListY_ - 2,
-            kSdLogDdW_, kSdLogListH_, kSdLogListBgId_, false, false);
+        log_list_bg_ = CreateLogSurface_(kSdLogDdX_, layout_.list_y - 2,
+            kSdLogDdW_, layout_.list_height, kSdLogListBgId_, false, false);
         if (log_list_bg_) AddItem(log_list_bg_);
 
         // 展开列表项：默认隐藏，展开时 Show、收起时 Hide（框架绘制，
@@ -308,8 +306,8 @@ struct SettingsDlg_ final : public H3Dlg
             if (!Utf8ToGbk_(LogLevelDisplayName_(i), gbk, sizeof(gbk)))
                 continue;
             H3DlgText* item = H3DlgText::Create(kSdLogDdX_ + 6,
-                kSdLogListY_ + i * kSdLogItemH_,
-                kSdLogDdW_ - 12, kSdLogItemH_, gbk,
+                layout_.list_y + i * layout_.item_height,
+                kSdLogDdW_ - 12, layout_.item_height, gbk,
                 "smalfont.fnt", 5, kSdLogItem0Id_ + i, 4, 0);
             if (item) {
                 item->HideDeactivate();
@@ -355,12 +353,12 @@ struct SettingsDlg_ final : public H3Dlg
             if (pcx) {
                 for (int i = 0; i < kSdLogLevelCount_; ++i) {
                     const bool selected = i == g_log_level;
-                    pcx->FillRectangle(2, 2 + i * kSdLogItemH_,
-                        kSdLogDdW_ - 4, kSdLogItemH_,
+                    pcx->FillRectangle(2, 2 + i * layout_.item_height,
+                        kSdLogDdW_ - 4, layout_.item_height,
                         selected ? 136 : 68, selected ? 88 : 42,
                         selected ? 24 : 18);
-                    pcx->DrawFrame(2, 2 + i * kSdLogItemH_,
-                        kSdLogDdW_ - 4, kSdLogItemH_,
+                    pcx->DrawFrame(2, 2 + i * layout_.item_height,
+                        kSdLogDdW_ - 4, layout_.item_height,
                         selected ? 232 : 166, selected ? 184 : 112,
                         selected ? 76 : 40);
                 }
@@ -396,9 +394,9 @@ struct SettingsDlg_ final : public H3Dlg
             const int x = msg.GetX() - GetX();
             const int y = msg.GetY() - GetY();
             if (x >= kSdLogDdX_ && x < kSdLogDdX_ + kSdLogDdW_
-                && y >= kSdLogListY_
-                && y < kSdLogListY_ + kSdLogLevelCount_ * kSdLogItemH_) {
-                const int level = (y - kSdLogListY_) / kSdLogItemH_;
+                && y >= layout_.list_y
+                && y < layout_.list_y + kSdLogLevelCount_ * layout_.item_height) {
+                const int level = (y - layout_.list_y) / layout_.item_height;
                 g_log_level = level;
                 const char* value = LogLevelName_(level);
                 if (!IniWriteKeyUtf8(g_user_ini_path, "Logging", "MinLevel", value))
@@ -489,7 +487,12 @@ static SettingsDlg_* s_active_dlg_ = nullptr;
 
 static void RunSettingsDialog_()
 {
-    SettingsDlg_ dlg;
+    const SmallFontLayout_ layout = MakeSmallFontLayout_(SmallFontHeight_());
+    if (!layout.fits) {
+        LogWarn("真随机: 小字体行高 %d 超出设置窗布局上限 32，未打开设置窗", SmallFontHeight_());
+        return;
+    }
+    SettingsDlg_ dlg(layout);
     s_active_dlg_ = &dlg;
     dlg.Start(); // 模态，返回即关窗；恢复背景由 vShow 的保存链负责
     InterlockedExchange(&s_listen_new_hotkey_, 0);

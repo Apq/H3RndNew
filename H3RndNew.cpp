@@ -23,6 +23,15 @@ PatcherInstance* _PI = nullptr;
 // 崩溃防御（CrashGuard，见 modules/CrashGuard.hpp 头注释 / 技能 h3-plugin-crash-guard）。
 #include "modules/CrashGuard.hpp"
 #include "modules/RandomAudit.inc.cpp"
+#include "modules/TextLayout.hpp"
+
+static int SmallFontHeight_()
+{
+    // Borrow the existing resource; do not Load/Dereference a game-owned font.
+    const H3SmallFont* font = H3SmallFont::Get();
+    return font && font->height > 0 ? font->height : 17;
+}
+
 #include "modules/TrueRandom.inc.cpp"
 #include "modules/SettingsDialog.inc.cpp"
 #include "modules/Entry.inc.cpp"

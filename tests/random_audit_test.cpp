@@ -35,6 +35,7 @@ static void LogDebug(const char* format, ...)
 static void LogWarn(const char*, ...) { ++warning_lines; }
 #include "../modules/RandomAudit.inc.cpp"
 #include "../modules/ScenarioContext.hpp"
+#include "../modules/TextLayout.hpp"
 static void require(bool ok, const char* message)
 {
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", message); std::exit(1); }
@@ -48,6 +49,34 @@ static void verify(const RandomAuditCounters_& c)
 void RunHookAbiTests_();
 int main()
 {
+    require(FontTextHeight_(0, 17) == 17, "zero height font floor");
+    require(FontTextHeight_(14, 17) == 17, "short height font floor");
+    require(FontTextHeight_(-1, 0) == 17, "positive fallback height");
+    const SmallFontLayout_ defaults = MakeSmallFontLayout_(17);
+    require(defaults.fits && defaults.text_height == 24 && defaults.item_height == 20
+        && defaults.log_y == 44 && defaults.list_y == 70 && defaults.list_height == 104
+        && defaults.full_y == 84 && defaults.ok_y == 140 && defaults.window_height == 190,
+        "default dialog geometry unchanged");
+    for (int font = 1; font <= 32; ++font) {
+        const SmallFontLayout_ layout = MakeSmallFontLayout_(font);
+        require(layout.fits && layout.text_height >= font && layout.item_height >= font,
+            "font floor on every text row");
+        require(12 + layout.text_height <= layout.log_y
+            && layout.log_y + layout.text_height <= layout.full_y
+            && layout.full_y + layout.text_height <= layout.ok_y,
+            "closed dialog rows do not overlap");
+        require(layout.list_y + 5 * layout.item_height + 2 <= layout.window_height,
+            "list and surface inside dialog");
+        for (int level = 0; level < 5; ++level) {
+            const int top = layout.list_y + level * layout.item_height;
+            require((top - layout.list_y) / layout.item_height == level
+                && (top + layout.item_height - 1 - layout.list_y) / layout.item_height == level,
+                "list pitch and first/last pixel hit agree");
+        }
+    }
+    require(!MakeSmallFontLayout_(33).fits && !MakeSmallFontLayout_(255).fits,
+        "oversized font has bounded layout rejection");
+    std::puts("PASS small-font text height and dialog geometry");
     RunHookAbiTests_();
     // Window authorization is independent of mouse/key messages and elapsed time.
     require(!AllowsNewGameWindow_(ConsumeScenarioContext_()), "unknown denies window");
