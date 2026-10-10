@@ -72,18 +72,13 @@ if ($Major -lt 0 -or $Minor -lt 0) {
     $text = $RcEncoding.GetString([System.IO.File]::ReadAllBytes($rc))
     $current = Get-VersionParts $text
     Write-Host "Current version: $($current.Major).$($current.Minor).$($current.Year).$($current.Date)"
-    # 双击 set-version.bat 无参运行时交互输入；stdin 被重定向（如 <nul）时
-    # Read-Host 返回空，按取消处理，不修改任何文件。
-    if ($Major -lt 0) {
-        $answer = Read-Host 'Major version'
-        if ($answer -notmatch '^\d+$') { Write-Host 'Canceled: no valid major version.'; exit 2 }
-        $Major = [int]$answer
-    }
-    if ($Minor -lt 0) {
-        $answer = Read-Host 'Minor version'
-        if ($answer -notmatch '^\d+$') { Write-Host 'Canceled: no valid minor version.'; exit 2 }
-        $Minor = [int]$answer
-    }
+    # 双击 set-version.bat 无参运行时一次性输入“主.次”（如 0.7，也接受 0 7 / 0,7）；
+    # stdin 被重定向（如 <nul）时 Read-Host 返回空，按取消处理，不修改任何文件。
+    $answer = Read-Host 'New version (major.minor, e.g. 0.7)'
+    $parsed = [regex]::Match($answer, '^\s*(\d+)[.,\s]+(\d+)\s*$')
+    if (-not $parsed.Success) { Write-Host 'Canceled: input must look like 0.7.'; exit 2 }
+    $Major = [int]$parsed.Groups[1].Value
+    $Minor = [int]$parsed.Groups[2].Value
 }
 
 $rcPathResolved = Resolve-RcPath $RcPath
