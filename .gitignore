@@ -72,6 +72,7 @@ Testing/
 .vs/
 *.vcxproj.user
 
-Release/
+Release/*
+!Release/*.zip
 .cowork-temp
 .hermes-tmp*
