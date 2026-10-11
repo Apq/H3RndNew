@@ -36,6 +36,12 @@ static void LogWarn(const char*, ...) { ++warning_lines; }
 #include "../modules/RandomAudit.inc.cpp"
 #include "../modules/ScenarioContext.hpp"
 #include "../modules/TextLayout.hpp"
+#include "../modules/BankMaximizeCore.hpp"
+struct ArtifactMock_ {
+    int type;
+    int disabled;
+};
+static int MockRoll_(int count) { return count > 1 ? count - 1 : 0; }
 static void require(bool ok, const char* message)
 {
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", message); std::exit(1); }
@@ -47,8 +53,92 @@ static void verify(const RandomAuditCounters_& c)
     require(c.entered == sum, "counter equation");
 }
 void RunHookAbiTests_();
+void RunBankRewardLayoutTests_();
 int main()
 {
+    const bankmax::ControlsLayout controls(422);
+    require(controls.Fits(766, 24) && controls.Fits(800, 24)
+        && !controls.Fits(765, 24) && !controls.Fits(766, 25)
+        && controls.percentX + controls.percentWidth == 760, "HD/native layout width and font boundaries");
+    require(bankmax::ClampRatio(-1) == 0 && bankmax::ClampRatio(1001) == 1000,
+        "ratio clamping");
+    require(bankmax::SuccessfulNewGame(true, 0xABCD01u)
+        && !bankmax::SuccessfulNewGame(true, 0xABCD00u)
+        && !bankmax::SuccessfulNewGame(false, 1u), "new-game result low byte gate");
+    require(bankmax::ResourceLimit(0) == 10 && bankmax::ResourceLimit(1) == 6
+        && bankmax::ResourceLimit(6) == 10, "resource maximums");
+    require(bankmax::RatioFromPixel(-5, 100) == 0
+        && bankmax::RatioFromPixel(500, 100) == 1000
+        && bankmax::RatioFromPixel(99, 100) == 1000
+        && bankmax::RatioFromPixel(0, 100) == 0
+        && bankmax::RatioFromPixel(49, 100) == 495, "pixel-to-ratio mapping");
+    bankmax::SliderGesture gesture;
+    bool inside = true;
+    require(gesture.Handle(bankmax::SliderEvent::Down, inside)
+        == bankmax::SliderAction::Update, "slider press updates ratio");
+    require(gesture.Handle(bankmax::SliderEvent::Move, true)
+        == bankmax::SliderAction::Update, "slider drag updates ratio");
+    require(gesture.Handle(bankmax::SliderEvent::Click, false)
+        == bankmax::SliderAction::Consume, "click swallowed after drag");
+    require(gesture.Handle(bankmax::SliderEvent::Click, false)
+        == bankmax::SliderAction::Pass, "later click not swallowed");
+    require(gesture.Handle(bankmax::SliderEvent::Down, false)
+        == bankmax::SliderAction::Pass, "press outside passes");
+    require(gesture.Handle(bankmax::SliderEvent::Click, inside)
+        == bankmax::SliderAction::Pass, "outside click passes");
+    require(gesture.Handle(bankmax::SliderEvent::Down, true)
+        == bankmax::SliderAction::Update, "new slider drag starts");
+    require(gesture.Handle(bankmax::SliderEvent::Move, false, true)
+        == bankmax::SliderAction::Update, "held drag outside continues");
+    require(gesture.Handle(bankmax::SliderEvent::Move, true, false)
+        == bankmax::SliderAction::Consume && !gesture.dragging,
+        "missing release stops on physical button-up without updating ratio");
+    require(gesture.Handle(bankmax::SliderEvent::Move, true, false)
+        == bankmax::SliderAction::Pass, "hover after release never moves slider");
+    require(gesture.Handle(bankmax::SliderEvent::Click, false)
+        == bankmax::SliderAction::Consume, "late release click still swallowed");
+    const uint32_t seaOld = 0xFFFF1FFBu;
+    const uint32_t seaNew = bankmax::SeaChestSetup(seaOld, 0x12);
+    require((seaNew & 3u) == 2u && ((seaNew >> 3) & 0x3FFu) == 0x12
+        && (seaNew & 4u) == (seaOld & 4u)
+        && (seaNew & ~0x1FFBu) == (seaOld & ~0x1FFBu), "sea chest bit preservation");
+    require((bankmax::ChestSetup(0xF800u) & 0x7800u) == 0x2000u,
+        "treasure chest 2000-gold tier");
+    for (int type = 0; type <= 6; ++type) {
+        const unsigned flags = 0xFFA80000u;
+        require((bankmax::ResourceSetup(flags | 1u, type) & 0x7FFFFu)
+            == static_cast<unsigned>(bankmax::ResourceLimit(type)), "resource max by type");
+        require((bankmax::ResourceSetup(flags | 1u, type) & ~0x7FFFFu)
+            == flags, "resource message and guardian flags preserved");
+        require(bankmax::ResourceSetup(flags | 99u, type) == (flags | 99u),
+            "higher authored resource remains intact");
+    }
+    for (unsigned type = 0; type < 6; ++type) {
+        require(bankmax::CampfireSetup((4u << 4) | type) == ((6u << 4) | type),
+            "campfire max quantity preserves type");
+        require(bankmax::CampfireSetup((10u << 4) | type) == ((10u << 4) | type),
+            "higher campfire preserved");
+    }
+    ArtifactMock_ info[144] = {};
+    signed char bans[144] = {}, pool[144] = {};
+    info[10].type = info[11].type = info[12].type = info[13].type = 2;
+    info[11].disabled = 1;
+    bans[12] = 1;
+    pool[13] = 1;
+    info[20].type = 16;
+    require(bankmax::PickArtifact(info, bans, pool, 2, &MockRoll_) == 10,
+        "strict selection excludes disabled map-ban used and wrong class");
+    require(bankmax::PickArtifact(info, bans, pool, 2, &MockRoll_) == 13
+        && pool[20] == 0, "exhausted class resets only itself");
+    require(!bankmax::ArtifactAllowed(info, bans, 12, 2)
+        && !bankmax::ArtifactAllowed(info, bans, 11, 2)
+        && !bankmax::ArtifactAllowed(info, bans, 20, 2)
+        && !bankmax::ArtifactAllowed(info, bans, 144, 2)
+        && bankmax::ArtifactAllowed(info, bans, 10, 2), "existing artifact legality");
+    bans[10] = bans[13] = 1;
+    require(bankmax::PickArtifact(info, bans, pool, 2, &MockRoll_) == -1,
+        "all treasure banned has no cross-class fallback");
+    std::puts("PASS bank-max rewards: success gate, setup bits, map artifact bans, pixel ratio and gestures");
     require(FontTextHeight_(0, 17) == 17, "zero height font floor");
     require(FontTextHeight_(14, 17) == 17, "short height font floor");
     require(FontTextHeight_(-1, 0) == 17, "positive fallback height");
@@ -77,6 +167,7 @@ int main()
     require(!MakeSmallFontLayout_(33).fits && !MakeSmallFontLayout_(255).fits,
         "oversized font has bounded layout rejection");
     std::puts("PASS small-font text height and dialog geometry");
+    RunBankRewardLayoutTests_();
     RunHookAbiTests_();
     // Window authorization is independent of mouse/key messages and elapsed time.
     require(!AllowsNewGameWindow_(ConsumeScenarioContext_()), "unknown denies window");

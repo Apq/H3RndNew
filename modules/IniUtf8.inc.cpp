@@ -251,9 +251,14 @@ static bool IniWriteKeyUtf8(const char* path, const char* section,
             } else if (in_section && !written) {
                 char* eq = strchr(t, '=');
                 if (eq) {
-                    *eq = 0;
-                    const bool key_match = _stricmp(IniTrim_(t), key) == 0;
-                    *eq = '=';
+                    // Compare without editing the source line: IniTrim_ on a
+                    // temporary terminator at '=' also erased the preceding
+                    // space, truncating unrelated keys when they were copied.
+                    const char* key_end = eq;
+                    while (key_end > t && (key_end[-1] == ' ' || key_end[-1] == '\t')) --key_end;
+                    const size_t key_length = static_cast<size_t>(key_end - t);
+                    const bool key_match = strlen(key) == key_length
+                        && _strnicmp(t, key, key_length) == 0;
                     if (key_match) {
                         char nl[320];
                         int n = _snprintf(nl, sizeof(nl) - 1, "%s = %s\r\n",

@@ -17,6 +17,10 @@ static int g_true_random_full = 0;
 // 设置窗热键的键盘扫描码（=H3 内部键码）：默认 87=F11。F12=88 被 SoD_SP 占用。
 static int g_settings_hotkey_scan = 87;
 
+// 宝屋最大化：复选框默认关闭，比例默认 100%。
+static int g_bank_maximize = 0;
+static int g_bank_ratio = 1000;
+
 // 分层读取：先默认层，再叠加玩家层（键存在且非空才覆盖）。两层都未命中 → fallback。
 static bool IniReadUtf8Layered(const char* section, const char* key,
     const char* fallback, char* out, int out_size)
@@ -208,6 +212,11 @@ static void ReadConfig()
         IniReadIntUtf8Layered("General", "TrueRandom", 0), 0, 1);
     g_true_random_full = ClampInt(
         IniReadIntUtf8Layered("General", "TrueRandomFull", 0), 0, 1);
+    g_bank_maximize = ClampInt(
+        IniReadIntUtf8Layered("BankMaximize", "Enabled", 0), 0, 1);
+    g_bank_ratio = ClampInt(
+        IniReadIntUtf8Layered("BankMaximize", "Ratio", 1000), 0, 1000);
+    LogInfo("宝屋最大化: 配置 勾选=%d 比例=%d/1000", g_bank_maximize, g_bank_ratio);
     {
         const int scan = IniReadIntUtf8Layered("General",
             "SettingsHotkeyScan", 87);

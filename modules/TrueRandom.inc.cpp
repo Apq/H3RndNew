@@ -8,6 +8,13 @@ static const UINT32 kStartGame_       = 0x58BFB0; // fastcall(this)，开始/装
 static const UINT32 kGameRand_        = 0x50C7C0; // fastcall(lo, hi)
 static const UINT32 kCrtRand_         = 0x61842C; // cdecl，随机图生成器直接调它
 
+// 宝屋最大化模块定义在本模块之后，复用场景/建档钩子的后置段。
+static void PlaceBankControls_(H3SelectScenarioDialog* dlg);
+static void RefreshBankControls_(H3SelectScenarioDialog* dlg);
+static bool HandleBankControls_(H3SelectScenarioDialog* dlg, H3Msg* msg);
+static void ResetBankDialog_();
+static void FinishBankMaximize_(bool newGame, unsigned result, int enabled, int ratio);
+
 // id 130 是右上区域下方的「随机图」按钮 (414,105) 200x20，仅作参照。
 // 「显示可选场景」在它正上方一行，id 128 同行 (414,81)。
 
@@ -221,7 +228,11 @@ static H3DlgText* s_label_ = nullptr;
 
 static void RefreshTrueRandomLabel_(H3SelectScenarioDialog* dlg)
 {
-    if (!dlg || !s_label_ || s_label_->GetID() != kLabelId_) return;
+    if (!dlg || !s_label_) return;
+    bool owned = false;
+    for (H3DlgItem* item : dlg->GetList()) if (item == s_label_) { owned = true; break; }
+    if (!owned) { s_label_ = nullptr; return; }
+    if (s_label_->GetID() != kLabelId_) return;
     s_label_->ShowActivate();
     // Draw 写入当前画布，Refresh 再把文字区域刷到窗口；顺序不能反。
     s_label_->Draw();
@@ -326,6 +337,7 @@ static int __stdcall OnScenarioProc_(HiHook* hook,
                     msg ? msg->command : -1, msg ? msg->subtype : -1,
                     msg ? msg->itemId : -1, ScenarioContextName_(context));
         }
+        if (HandleBankControls_(dlg, msg)) return 1;
         if (msg && dlg
             && msg->command == eMsgCommand::ITEM_COMMAND
             && msg->subtype == eMsgSubtype::LBUTTON_DOWN)
@@ -353,13 +365,16 @@ static int __stdcall OnScenarioProc_(HiHook* hook,
     const int result = THISCALL_2(int, hook->GetDefaultFunc(), dlg, msg);
 
     __try {
+        if (result == 2) { ResetBankDialog_(); s_label_ = nullptr; return result; }
         RefreshTrueRandomLabel_(dlg);
         // 原函数处理完这条消息后再动控件列表，避免在它的遍历中途插入。
         if (dlg && dlg != s_seen_dlg_) {
             s_seen_dlg_ = dlg;
             LogInventory_(dlg, "首消息");
             PlaceTrueRandomCheckbox_(dlg, "首消息");
+            PlaceBankControls_(dlg);
         }
+        RefreshBankControls_(dlg);
     } __except (GuardCrashFilter_(GUARD_SCENARIO_PROC, GetExceptionInformation())) {}
     return result;
 }
@@ -373,6 +388,7 @@ static H3SelectScenarioDialog* __stdcall OnScenarioCtor_(HiHook* hook,
     __try {
         s_seen_dlg_ = nullptr;
         s_label_ = nullptr;
+        ResetBankDialog_();
         const ScenarioContext_ context = dlg ? ClassifyScenarioContext_(
             dlg->isCampaignMaybe != 0, dlg->isLoadingMaybe != 0) : kScenarioUnknown_;
         ObserveScenarioContext_(context);
@@ -474,10 +490,13 @@ static int __stdcall OnCrtRand_(HiHook* hook)
 static int __stdcall OnStartGame_(HiHook* hook, int self)
 {
     BOOL allow_window = FALSE;
+    BOOL new_game_entry = FALSE;
     ScenarioContext_ context = kScenarioUnknown_;
     __try {
         context = ConsumeScenarioContext_();
         allow_window = AllowsNewGameWindow_(context);
+        new_game_entry = self && *reinterpret_cast<BYTE*>(self + 0x64) == 0
+            && *reinterpret_cast<BYTE*>(self + 0x65) == 0 && allow_window;
         InterlockedExchange(&g_in_new_game_, 0);
         InterlockedExchange(&g_replaced_count_, 0);
         // +37f 只留诊断，不再把未确认语义的字段作为读档判据。
@@ -539,6 +558,8 @@ static int __stdcall OnStartGame_(HiHook* hook, int self)
                 static_cast<int>(g_replaced_count_));
             LogRandomAudit_("开局结束");
         }
+        FinishBankMaximize_(new_game_entry != FALSE, static_cast<unsigned>(result),
+            g_bank_maximize, g_bank_ratio);
     } __except (GuardCrashFilter_(GUARD_START_GAME, GetExceptionInformation())) {}
     return result;
 }

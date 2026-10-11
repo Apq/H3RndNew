@@ -33,5 +33,6 @@ static int SmallFontHeight_()
 }
 
 #include "modules/TrueRandom.inc.cpp"
+#include "modules/BankMaximize.inc.cpp"
 #include "modules/SettingsDialog.inc.cpp"
 #include "modules/Entry.inc.cpp"

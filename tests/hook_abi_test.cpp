@@ -9,6 +9,58 @@ static void CheckHook_(bool ok, const char* message)
 {
     if (!ok) { std::fprintf(stderr, "FAIL hook ABI: %s\n", message); std::exit(1); }
 }
+void RunBankRewardLayoutTests_()
+{
+    // Raw game-layout storage avoids constructors that call Heroes3 addresses.
+    H3CreatureBank* bank = static_cast<H3CreatureBank*>(std::calloc(1, sizeof(H3CreatureBank)));
+    H3CreatureBankState* state = static_cast<H3CreatureBankState*>(std::calloc(1, sizeof(H3CreatureBankState)));
+    CheckHook_(bank && state, "allocate native reward storage");
+    std::memset(bank, 0xA5, sizeof(*bank));
+    BYTE before[sizeof(H3CreatureBank)];
+    std::memcpy(before, bank, sizeof(before));
+    for (int i = 0; i < 7; ++i) state->resources.asArray[i] = 10 + i;
+    state->creatureRewardType = 13;
+    state->creatureRewardCount = 4;
+    bankmax::CopyRewardFields(*bank, *state);
+    CheckHook_(std::memcmp(before, &bank->guardians, sizeof(H3Army)) == 0,
+        "native guardian bytes unchanged");
+    CheckHook_(bank->resources.asArray[6] == 16 && bank->creatureRewardType == 13
+        && bank->creatureRewardCount == 4, "native reward offsets updated");
+    CheckHook_(std::memcmp(before + 0x59, reinterpret_cast<BYTE*>(bank) + 0x59,
+        sizeof(*bank) - 0x59) == 0, "padding and artifact vector untouched by reward copy");
+    std::free(bank); std::free(state);
+    std::puts("PASS bank-max native reward layout and guardian byte preservation");
+    // Exercise the production UTF-8 INI writer and layered reader using isolated
+    // OS-created temporary files; never touch the player's configuration.
+    wchar_t* tempDir = new wchar_t[kPathCap_ / 2];
+    wchar_t* defaultFile = new wchar_t[kPathCap_ / 2];
+    wchar_t* userFile = new wchar_t[kPathCap_ / 2];
+    CheckHook_(GetTempPathW(kPathCap_ / 2, tempDir) != 0, "temporary directory");
+    CheckHook_(GetTempFileNameW(tempDir, L"h3d", 0, defaultFile) != 0
+        && GetTempFileNameW(tempDir, L"h3u", 0, userFile) != 0, "temporary INI files");
+    char* savedDefault = g_ini_path;
+    char* savedUser = g_user_ini_path;
+    g_ini_path = new char[kPathCap_];
+    g_user_ini_path = new char[kPathCap_];
+    WideCharToMultiByte(CP_UTF8, 0, defaultFile, -1, g_ini_path, kPathCap_, nullptr, nullptr);
+    WideCharToMultiByte(CP_UTF8, 0, userFile, -1, g_user_ini_path, kPathCap_, nullptr, nullptr);
+    CheckHook_(IniWriteKeyUtf8(g_ini_path, "BankMaximize", "Enabled", "0"), "default checkbox write");
+    CheckHook_(IniReadIntUtf8Layered("BankMaximize", "Enabled", 0) == 0, "first-use default unchecked");
+    PersistBankSetting_("Enabled", 1);
+    PersistBankSetting_("Ratio", 735);
+    CheckHook_(IniReadIntUtf8Layered("BankMaximize", "Enabled", 0) == 1
+        && IniReadIntUtf8Layered("BankMaximize", "Ratio", 1000) == 735,
+        "saved user checkbox and ratio override factory defaults");
+    PersistBankSetting_("Enabled", 0);
+    CheckHook_(IniReadIntUtf8Layered("BankMaximize", "Enabled", 1) == 0
+        && IniReadIntUtf8Layered("BankMaximize", "Ratio", 1000) == 735,
+        "unchecking persists without resetting ratio");
+    delete[] g_ini_path; delete[] g_user_ini_path;
+    g_ini_path = savedDefault; g_user_ini_path = savedUser;
+    DeleteFileW(defaultFile); DeleteFileW(userFile);
+    delete[] tempDir; delete[] defaultFile; delete[] userFile;
+    std::puts("PASS bank-max user INI persistence and default/user precedence");
+}
 // A patched local function must remain a standard ABI boundary. Otherwise MSVC
 // can preserve volatile registers across a call using its known local body.
 #pragma optimize("", off)

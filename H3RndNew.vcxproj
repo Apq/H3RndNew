@@ -66,6 +66,8 @@
     <ClInclude Include="modules\RandomAudit.inc.cpp" />
     <ClInclude Include="modules\ScenarioContext.hpp" />
     <ClInclude Include="modules\TrueRandom.inc.cpp" />
+    <ClInclude Include="modules\BankMaximizeCore.hpp" />
+    <ClInclude Include="modules\BankMaximize.inc.cpp" />
     <ClInclude Include="modules\SettingsDialog.inc.cpp" />
     <ClInclude Include="modules\Entry.inc.cpp" />
     <ClInclude Include="resource.h" />
