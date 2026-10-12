@@ -36,4 +36,5 @@ static int SmallFontHeight_()
 #include "modules/BankMaximize.inc.cpp"
 #include "modules/SettingsDialog.inc.cpp"
 #include "modules/WarehouseStore.inc.cpp"
+#include "modules/WarehouseUiStageA.inc.cpp"
 #include "modules/Entry.inc.cpp"

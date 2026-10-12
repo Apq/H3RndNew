@@ -58,6 +58,7 @@ void RunWarehouseTests_();
 void RunWarehouseCoreTests_();
 void RunWarehouseStoreTests_();
 void RunWarehouseNativeTests_();
+int RunWarehouseUiTests_();
 int main()
 {
     const bankmax::ControlsLayout controls(422);
@@ -168,6 +169,7 @@ int main()
     RunWarehouseCoreTests_();
     RunWarehouseStoreTests_();
     RunWarehouseNativeTests_();
+    RunWarehouseUiTests_();
     RunHookAbiTests_();
     // Window authorization is independent of mouse/key messages and elapsed time.
     require(!AllowsNewGameWindow_(ConsumeScenarioContext_()), "unknown denies window");
