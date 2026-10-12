@@ -97,11 +97,6 @@ int main()
         == bankmax::SliderAction::Pass, "hover after release never moves slider");
     require(gesture.Handle(bankmax::SliderEvent::Click, false)
         == bankmax::SliderAction::Consume, "late release click still swallowed");
-    const uint32_t seaOld = 0xFFFF1FFBu;
-    const uint32_t seaNew = bankmax::SeaChestSetup(seaOld, 0x12);
-    require((seaNew & 3u) == 2u && ((seaNew >> 3) & 0x3FFu) == 0x12
-        && (seaNew & 4u) == (seaOld & 4u)
-        && (seaNew & ~0x1FFBu) == (seaOld & ~0x1FFBu), "sea chest bit preservation");
     require((bankmax::ChestSetup(0xF800u) & 0x7800u) == 0x2000u,
         "treasure chest 2000-gold tier");
     for (int type = 0; type <= 6; ++type) {
@@ -130,11 +125,6 @@ int main()
         "strict selection excludes disabled map-ban used and wrong class");
     require(bankmax::PickArtifact(info, bans, pool, 2, &MockRoll_) == 13
         && pool[20] == 0, "exhausted class resets only itself");
-    require(!bankmax::ArtifactAllowed(info, bans, 12, 2)
-        && !bankmax::ArtifactAllowed(info, bans, 11, 2)
-        && !bankmax::ArtifactAllowed(info, bans, 20, 2)
-        && !bankmax::ArtifactAllowed(info, bans, 144, 2)
-        && bankmax::ArtifactAllowed(info, bans, 10, 2), "existing artifact legality");
     bans[10] = bans[13] = 1;
     require(bankmax::PickArtifact(info, bans, pool, 2, &MockRoll_) == -1,
         "all treasure banned has no cross-class fallback");

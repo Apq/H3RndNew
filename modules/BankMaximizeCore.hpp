@@ -63,11 +63,6 @@ inline uint32_t ResourceSetup(uint32_t old, int type) {
     // Explicit map-author/RMG amounts above the ordinary upper bound remain intact.
     return limit && value < limit ? (old & ~0x7FFFFu) | limit : old;
 }
-inline uint32_t SeaChestSetup(uint32_t old, unsigned artifact) {
-    // level occupies bits0-1 and artifactID bits3-12; bit2 and upper bits
-    // must stay untouched. Clearing 0x1FFB also drops the old artifact low bits.
-    return (old & ~0x1FFBu) | 2u | ((artifact & 0x3FFu) << 3);
-}
 inline uint32_t CampfireSetup(uint32_t old) {
     return (old & 15u) | ((old >> 4) < 6u ? (6u << 4) : (old & 0xFFFFFFF0u));
 }
@@ -77,11 +72,6 @@ inline void CopyRewardFields(Bank& bank, const State& state) {
     bank.creatureRewardType = state.creatureRewardType;
     bank.creatureRewardCount = state.creatureRewardCount;
     // Never assign guardians or the entire bank/state.
-}
-template<class Artifact>
-inline bool ArtifactAllowed(const Artifact* info, const signed char* banned, int id, int mask) {
-    return info && id >= 0 && id < 144 && !info[id].disabled
-        && !banned[id] && (static_cast<int>(info[id].type) & mask) != 0;
 }
 // Strict class selection: disabled and map-banned artifacts never enter the pool.
 // A depleted class restarts from map allowances; no fallback to a lower class.

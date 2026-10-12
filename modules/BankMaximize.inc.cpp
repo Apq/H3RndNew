@@ -242,18 +242,19 @@ static void ApplyBankMaximize_(int ratio) {
     BYTE* seen = static_cast<BYTE*>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 4096));
     if (!seen) { LogWarn("宝屋最大化: 无法分配去重表，跳过"); return; }
     const DWORD start = GetTickCount();
-    int totals[5] = {}, changed[5] = {}, skipped = 0;
+    int totals[4] = {}, changed[4] = {}, skipped = 0;
     __try {
         const int count = main->mainSetup.mapSize * main->mainSetup.mapSize * (main->mainSetup.hasUnderground + 1);
         for (int index = 0; index < count; ++index) {
             H3MapItem& item = main->mainSetup.mapitems[index];
             if (!item.IsEntrance()) continue;
             int bankType = BankType_(item), group = -1;
+            // Sea chests (objectType 82) are excluded by user decision: never
+            // modify them, not even their artifact setup.
             if (bankType >= 0) group = 0;
             else if (item.objectType == 101) group = 1;
-            else if (item.objectType == 82) group = 2;
-            else if (item.objectType == 79 && bankmax::ResourceLimit(item.objectSubtype)) group = 3;
-            else if (item.objectType == 12 && item.campfire.resType <= 5) group = 4;
+            else if (item.objectType == 79 && bankmax::ResourceLimit(item.objectSubtype)) group = 2;
+            else if (item.objectType == 12 && item.campfire.resType <= 5) group = 3;
             if (group < 0) continue;
             if (group == 0) {
                 unsigned id = item.creatureBank.id;
@@ -268,32 +269,15 @@ static void ApplyBankMaximize_(int ratio) {
             if (group == 0) {
                 if (!ReplaceBankReward_(main, main->creatureBanks[item.creatureBank.id], bankType)) { ++skipped; continue; }
             } else if (group == 1) item.setup = bankmax::ChestSetup(item.setup);
-            else if (group == 2) {
-                // Confirmed max tier: 1000 gold + one Treasure artifact. Validate
-                // an existing artifact against the same map-wide restrictions;
-                // native generation may have fallen back across artifact classes.
-                signed char used[144]; memcpy(used, main->randomArtifacts, sizeof(used));
-                H3ArtifactSetup* info = H3ArtifactSetup::Get();
-                const int oldArtifact = static_cast<int>(item.seaChest.artifactID);
-                const bool valid = item.seaChest.level == 2
-                    && bankmax::ArtifactAllowed(info, main->artifactsAllowed,
-                        oldArtifact, NH3Artifacts::NType::TREASURE);
-                if (!valid) {
-                    int artifact = info ? bankmax::PickArtifact(info, main->artifactsAllowed,
-                        used, NH3Artifacts::NType::TREASURE, &BankRoll_) : -1;
-                    if (artifact < 0) { ++skipped; continue; }
-                    item.setup = bankmax::SeaChestSetup(item.setup, static_cast<unsigned>(artifact));
-                    memcpy(main->randomArtifacts, used, sizeof(used));
-                }
-            } else if (group == 3) item.setup = bankmax::ResourceSetup(item.setup, item.objectSubtype);
+            else if (group == 2) item.setup = bankmax::ResourceSetup(item.setup, item.objectSubtype);
             else item.setup = bankmax::CampfireSetup(item.setup);
             ++changed[group];
         }
     } __finally { HeapFree(GetProcessHeap(), 0, seen); }
-    LogInfo("宝屋最大化: 新档奖励后处理 比例=%d/1000 宝屋=%d/%d 宝箱=%d/%d 海箱=%d/%d "
-        "资源=%d/%d 营火=%d/%d 跳过=%d 耗时=%lu毫秒（守军保持原样）", ratio,
-        changed[0], totals[0], changed[1], totals[1], changed[2], totals[2], changed[3], totals[3],
-        changed[4], totals[4], skipped, GetTickCount() - start);
+    LogInfo("宝屋最大化: 新档奖励后处理 比例=%d/1000 宝屋=%d/%d 宝箱=%d/%d "
+        "资源=%d/%d 营火=%d/%d 跳过=%d 耗时=%lu毫秒（守军保持原样，海箱不处理）", ratio,
+        changed[0], totals[0], changed[1], totals[1], changed[2], totals[2],
+        changed[3], totals[3], skipped, GetTickCount() - start);
 }
 static void FinishBankMaximize_(bool newGame, unsigned result, int enabled, int ratio) {
     if (!bankmax::SuccessfulNewGame(newGame, result) || !enabled || ratio <= 0) return;
