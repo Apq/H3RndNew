@@ -37,7 +37,7 @@
 - F12 已被 SoD_SP 插件的设置占用，别选。
 - 热键存的是键盘扫描码（=游戏内部键码），默认 87=F11。
 
-玩家能看到的完整行为见 [需求文档.md](docs/需求文档.md)，接入点和取数替换见 [设计文档.md](docs/设计文档.md)；「宝屋最大化」的完整档位和实现边界见 [宝屋最大化设计文档.md](docs/宝屋最大化设计文档.md)。拟新增的「仓库」功能见 [仓库设计文档.md](docs/仓库设计文档.md)，目前仅设计，尚未实现。
+玩家能看到的完整行为见 [需求文档.md](docs/需求文档.md)，接入点和取数替换见 [设计文档.md](docs/设计文档.md)；「宝屋最大化」的完整档位和实现边界见 [宝屋最大化设计文档.md](docs/宝屋最大化设计文档.md)。「仓库」功能的纯逻辑 `WarehouseCore` 与 v1 附件 `WarehouseCodec` 已完成独立测试；游戏内背包 UI、SaveGame/LoadGame 后置接线和实际文件 I/O 尚未实现，详见[仓库设计文档.md](docs/仓库设计文档.md)。
 
 ## 部署
 
@@ -63,7 +63,7 @@ H3RndNew.default.ini
 build.bat
 ```
 
-它用 Visual Studio 2026 的 MSBuild 做 Release|Win32 全量 Rebuild。产物是 `Release\H3RndNew.dll`。编译依赖仓库里的 `H3API\single_header`，不另带一份头文件。先 `set H3RND_RUN_AUDIT_TESTS=1 && build.bat` 会额外编译并运行不启动游戏的随机审计独立测试（`tests\random_audit_test.cpp`）。
+它用 Visual Studio 2026 的 MSBuild 做 Release|Win32 全量 Rebuild。产物是 `Release\H3RndNew.dll`。编译依赖仓库里的 `H3API\single_header`，不另带一份头文件。在 CMD 中先设置 `set "H3RND_RUN_AUDIT_TESTS=1"` 和 `set "H3RND_PATCHER_DLL=<游戏目录>\patcher_x86.dll"`，再运行 `build.bat`，会额外编译并运行不启动游戏的随机审计、真实 patcher ABI、仓库 Core/Codec 独立测试。连续命令须用引号赋值，避免 `set VAR=1 &&` 把尾随空格写入值而跳过测试。仓库金样另可运行 `python tests/warehouse_golden.py --check` 验证。
 
 ## 打包
 

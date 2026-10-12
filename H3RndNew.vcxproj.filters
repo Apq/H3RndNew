@@ -20,6 +20,8 @@
     <ClCompile Include="modules\Entry.inc.cpp" />
     <ClCompile Include="modules\SettingsDialog.inc.cpp" />
     <ClCompile Include="modules\TrueRandom.inc.cpp" />
+    <ClInclude Include="modules\WarehouseCore.hpp" />
+    <ClInclude Include="modules\WarehouseCodec.hpp" />
     <ClInclude Include="modules\RandomAudit.inc.cpp" />
   </ItemGroup>
   <ItemGroup>

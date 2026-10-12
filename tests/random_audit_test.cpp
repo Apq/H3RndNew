@@ -54,6 +54,8 @@ static void verify(const RandomAuditCounters_& c)
 }
 void RunHookAbiTests_();
 void RunBankRewardLayoutTests_();
+void RunWarehouseTests_();
+void RunWarehouseCoreTests_();
 int main()
 {
     const bankmax::ControlsLayout controls(422);
@@ -158,6 +160,10 @@ int main()
         "oversized font has bounded layout rejection");
     std::puts("PASS small-font text height and dialog geometry");
     RunBankRewardLayoutTests_();
+    // Pure warehouse tests do not require the optional installed patcher DLL;
+    // run them before the ABI integration gate so their result is observable.
+    RunWarehouseTests_();
+    RunWarehouseCoreTests_();
     RunHookAbiTests_();
     // Window authorization is independent of mouse/key messages and elapsed time.
     require(!AllowsNewGameWindow_(ConsumeScenarioContext_()), "unknown denies window");
