@@ -80,6 +80,42 @@ const char* WhStatusName_(whstore::Status status) noexcept
     return "?";
 }
 
+// Game stream paths arrive as the process ANSI code page (the file I/O below
+// intentionally remains CreateFileA). Convert only the diagnostic copy so the
+// log stays valid UTF-8 even when the save directory contains Chinese text.
+char* WhPathUtf8ForLog_(const char* path) noexcept
+{
+    if (!path) return nullptr;
+    const int wideChars = MultiByteToWideChar(CP_ACP, 0, path, -1, nullptr, 0);
+    if (wideChars <= 0 || wideChars > static_cast<int>(kPathCap_ / 2))
+        return nullptr;
+    wchar_t* wide = new (std::nothrow) wchar_t[wideChars];
+    if (!wide) return nullptr;
+    if (MultiByteToWideChar(CP_ACP, 0, path, -1, wide, wideChars) <= 0) {
+        delete[] wide;
+        return nullptr;
+    }
+    const int utf8Bytes = WideCharToMultiByte(CP_UTF8, 0, wide, -1,
+        nullptr, 0, nullptr, nullptr);
+    if (utf8Bytes <= 0 || utf8Bytes > static_cast<int>(kPathCap_)) {
+        delete[] wide;
+        return nullptr;
+    }
+    char* utf8 = new (std::nothrow) char[utf8Bytes];
+    if (!utf8) {
+        delete[] wide;
+        return nullptr;
+    }
+    const int written = WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8,
+        utf8Bytes, nullptr, nullptr);
+    delete[] wide;
+    if (written <= 0) {
+        delete[] utf8;
+        return nullptr;
+    }
+    return utf8;
+}
+
 bool WhReadFile_(const char* path, std::vector<std::uint8_t>& out) noexcept
 {
     out.clear();
@@ -187,14 +223,18 @@ void WhAfterSave_(std::uint64_t token, bool nativeOk,
         LogInfo("仓库: 未捕获到本次存档实际路径，拒绝附加（fail-closed）");
         return;
     }
+    char* logPath = WhPathUtf8ForLog_(path);
     std::vector<std::uint8_t> file;
     if (!WhReadFile_(path, file)) {
-        LogInfo("仓库: 读取已保存文件失败，拒绝附加 path=%s", path);
+        LogInfo("仓库: 读取已保存文件失败，拒绝附加 path=%s",
+            logPath ? logPath : "?");
+        delete[] logPath;
         return;
     }
     warehouse::native::NativeBoundary boundary;
     if (!warehouse::native::ScanNativeEnd(file, boundary)) {
         LogInfo("仓库: 原生流边界不可信，拒绝附加 size=%zu", file.size());
+        delete[] logPath;
         return;
     }
     whstore::Observation observation;
@@ -210,19 +250,25 @@ void WhAfterSave_(std::uint64_t token, bool nativeOk,
         plan = whstore::PlanSave(file, observation, g_warehouse_.heroes, {});
     } catch (...) {
         LogInfo("仓库: 保存计划异常，拒绝附加");
+        delete[] logPath;
         return;
     }
     if (plan.status != whstore::Status::Ok) {
         LogInfo("仓库: 保存被策略拒绝 status=%s codecError=%d 原文件保持原样",
             WhStatusName_(plan.status), static_cast<int>(plan.codecError));
+        delete[] logPath;
         return;
     }
     if (!WhWriteFileAtomic_(path, plan.newFile)) {
-        LogInfo("仓库: 附加写入失败，原文件保持原样 path=%s", path);
+        LogInfo("仓库: 附加写入失败，原文件保持原样 path=%s",
+            logPath ? logPath : "?");
+        delete[] logPath;
         return;
     }
     LogInfo("仓库: 已附加 %zu 字节（原生前缀 %zu 字节）path=%s",
-        plan.newFile.size() - boundary.nativeEnd, boundary.nativeEnd, path);
+        plan.newFile.size() - boundary.nativeEnd, boundary.nativeEnd,
+        logPath ? logPath : "?");
+    delete[] logPath;
 }
 
 // 读档后置：POD 入参，策略裁决 + 生命周期（NoAttachment→显式清空、
@@ -238,14 +284,18 @@ void WhAfterLoad_(std::uint64_t token, bool nativeOk,
         LogInfo("仓库: 未捕获到本次读档实际路径，仓库状态不动（fail-closed）");
         return;
     }
+    char* logPath = WhPathUtf8ForLog_(path);
     std::vector<std::uint8_t> file;
     if (!WhReadFile_(path, file)) {
-        LogInfo("仓库: 读取已载入文件失败，仓库状态不动 path=%s", path);
+        LogInfo("仓库: 读取已载入文件失败，仓库状态不动 path=%s",
+            logPath ? logPath : "?");
+        delete[] logPath;
         return;
     }
     warehouse::native::NativeBoundary boundary;
     if (!warehouse::native::ScanNativeEnd(file, boundary)) {
         LogInfo("仓库: 原生流边界不可信，仓库状态不动 size=%zu", file.size());
+        delete[] logPath;
         return;
     }
     whstore::Observation observation;
@@ -261,6 +311,7 @@ void WhAfterLoad_(std::uint64_t token, bool nativeOk,
         plan = whstore::ApplyLoad(file, observation, g_warehouse_, {});
     } catch (...) {
         LogInfo("仓库: 读档策略异常，仓库状态不动");
+        delete[] logPath;
         return;
     }
     switch (plan.status) {
@@ -268,6 +319,7 @@ void WhAfterLoad_(std::uint64_t token, bool nativeOk,
             InterlockedExchange(&g_wh_locked_, 0);
             LogInfo("仓库: 读档成功，156 仓库已整包替换 epoch=%llu",
                 static_cast<unsigned long long>(g_warehouse_.mutationEpoch));
+            delete[] logPath;
             return;
         case whstore::Status::NoAttachmentLegacyUnknown: {
             // 门禁全绿仍无自有块 = 确认从未有过仓库块的原生档：显式清空
@@ -276,6 +328,7 @@ void WhAfterLoad_(std::uint64_t token, bool nativeOk,
             InterlockedExchange(&g_wh_locked_, 0);
             LogInfo("仓库: 原生档无仓库块，按旧档显式清空 result=%d",
                 static_cast<int>(cleared));
+            delete[] logPath;
             return;
         }
         case whstore::Status::AttachmentInvalid:
@@ -286,10 +339,12 @@ void WhAfterLoad_(std::uint64_t token, bool nativeOk,
                 "锁定=%d（下次成功读档/新局解除）",
                 WhStatusName_(plan.status), static_cast<int>(plan.codecError),
                 static_cast<int>(plan.replaceResult), plan.lockAdvised ? 1 : 0);
+            delete[] logPath;
             return;
         default:
             LogInfo("仓库: 读档被策略拒绝 status=%s（状态不动）",
                 WhStatusName_(plan.status));
+            delete[] logPath;
             return;
     }
 }

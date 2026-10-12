@@ -152,8 +152,68 @@ static bool WhReadWhole_(const char* path, std::vector<std::uint8_t>& bytes)
     return ok;
 }
 
+static void CheckWarehouseLogEncoding_()
+{
+    wchar_t* tempDir = new wchar_t[kPathCap_ / 2];
+    wchar_t* tempLog = new wchar_t[kPathCap_ / 2];
+    CheckHook_(GetTempPathW(kPathCap_ / 2, tempDir) != 0
+        && GetTempFileNameW(tempDir, L"whl", 0, tempLog) != 0,
+        "UTF-8 log temp path");
+
+    const wchar_t sourcePath[] = L"D:\\测试\\warehouse.GM1";
+    char ansiPath[128] = {};
+    CheckHook_(WideCharToMultiByte(CP_ACP, 0, sourcePath, -1, ansiPath,
+        sizeof(ansiPath), nullptr, nullptr) != 0, "encode ANSI fixture path");
+    char* utf8Path = WhPathUtf8ForLog_(ansiPath);
+    CheckHook_(utf8Path != nullptr
+        && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8Path,
+            -1, nullptr, 0) > 0,
+        "ANSI path becomes valid UTF-8 before logging");
+
+    wchar_t* savedLogPath = g_log_path_w;
+    const bool savedDisableLog = g_disable_log;
+    const int savedLogLevel = g_log_level;
+    g_log_path_w = tempLog;
+    g_disable_log = false;
+    g_log_level = LOG_TRACE;
+    WriteLogLv(LOG_INFO, "仓库日志编码回归 path=%s", utf8Path ? utf8Path : "?");
+    g_log_path_w = savedLogPath;
+    g_disable_log = savedDisableLog;
+    g_log_level = savedLogLevel;
+
+    HANDLE file = CreateFileW(tempLog, GENERIC_READ, FILE_SHARE_READ, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    CheckHook_(file != INVALID_HANDLE_VALUE, "open UTF-8 log fixture");
+    if (file != INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER size{};
+        CheckHook_(GetFileSizeEx(file, &size) && size.QuadPart >= 3,
+            "UTF-8 log has contents");
+        std::vector<char> bytes(static_cast<std::size_t>(size.QuadPart) + 1, 0);
+        DWORD read = 0;
+        CheckHook_(ReadFile(file, bytes.data(), static_cast<DWORD>(size.QuadPart),
+            &read, nullptr) && read == static_cast<DWORD>(size.QuadPart),
+            "read UTF-8 log fixture");
+        CloseHandle(file);
+        CheckHook_(static_cast<unsigned char>(bytes[0]) == 0xEF
+            && static_cast<unsigned char>(bytes[1]) == 0xBB
+            && static_cast<unsigned char>(bytes[2]) == 0xBF,
+            "log starts with UTF-8 BOM");
+        CheckHook_(MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+            bytes.data() + 3, static_cast<int>(read - 3), nullptr, 0) > 0,
+            "complete log payload is strict UTF-8");
+        CheckHook_(utf8Path && std::strstr(bytes.data() + 3, utf8Path) != nullptr,
+            "UTF-8 log preserves converted Chinese path");
+    }
+    delete[] utf8Path;
+    DeleteFileW(tempLog);
+    delete[] tempLog;
+    delete[] tempDir;
+}
+
 void RunWarehouseHookTests_()
 {
+    CheckWarehouseLogEncoding_();
+
     // 1) Chained SaveGame-thread entry: replicate production install order
     //    (TrueRandom first, warehouse second) and verify the context peek.
     CheckHook_(_PI->WriteHiHook(reinterpret_cast<UINT32>(&MockWhStart_), SPLICE_,
