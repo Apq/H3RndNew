@@ -70,6 +70,7 @@
     <ClInclude Include="modules\BankMaximize.inc.cpp" />
     <ClInclude Include="modules\WarehouseCore.hpp" />
     <ClInclude Include="modules\WarehouseCodec.hpp" />
+    <ClInclude Include="modules\WarehouseStore.hpp" />
     <ClInclude Include="modules\SettingsDialog.inc.cpp" />
     <ClInclude Include="modules\Entry.inc.cpp" />
     <ClInclude Include="resource.h" />
