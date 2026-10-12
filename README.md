@@ -37,7 +37,7 @@
 - F12 已被 SoD_SP 插件的设置占用，别选。
 - 热键存的是键盘扫描码（=游戏内部键码），默认 87=F11。
 
-玩家能看到的完整行为见 [需求文档.md](docs/需求文档.md)，接入点和取数替换见 [设计文档.md](docs/设计文档.md)；「宝屋最大化」的完整档位和实现边界见 [宝屋最大化设计文档.md](docs/宝屋最大化设计文档.md)。「仓库」功能的纯逻辑 `WarehouseCore`、v1 附件 `WarehouseCodec` 与事务策略层 `WarehouseStore` 已完成独立测试；游戏内背包 UI、SaveGame/LoadGame 原生适配（路径捕获/nativeEnd/文件I/O）尚未实现，详见[仓库设计文档.md](docs/仓库设计文档.md)。
+玩家能看到的完整行为见 [需求文档.md](docs/需求文档.md)，接入点和取数替换见 [设计文档.md](docs/设计文档.md)；「宝屋最大化」的完整档位和实现边界见 [宝屋最大化设计文档.md](docs/宝屋最大化设计文档.md)。「仓库」功能的纯逻辑 `WarehouseCore`、v1 附件 `WarehouseCodec`、事务策略层 `WarehouseStore` 与原生适配层 `WarehouseStore.inc.cpp`（SaveGame/LoadGame 后置 Hook、实际路径捕获、zlib 边界读取器、原子写回、新局清空）已完成离线测试与真实 patcher ABI 回归；游戏内背包 UI 尚未实现，游戏内存档行为待用户验收，详见[仓库设计文档.md](docs/仓库设计文档.md)。
 
 ## 部署
 

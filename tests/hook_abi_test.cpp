@@ -61,6 +61,211 @@ void RunBankRewardLayoutTests_()
     delete[] tempDir; delete[] defaultFile; delete[] userFile;
     std::puts("PASS bank-max user INI persistence and default/user precedence");
 }
+// ====== Warehouse native adapter: real-patcher ABI + offline end-to-end ======
+// Mock bodies simulate the real native sequence (stream open -> close inside
+// the save/load call) so the production orchestration runs unmodified.
+static const char* g_wh_test_path_ = nullptr;
+static const char* g_wh_test_mode_ = nullptr;
+static void* __fastcall MockWhStream_(int self, int pad, const char* path, const char* mode);
+static void __fastcall MockWhClose_(int self);
+void RunWarehouseHookTests_();
+static int g_wh_calls_ = 0;
+
+static __declspec(noinline) int __fastcall MockWhSave_(int self, int n1, int n2,
+    int n3, int n4, int n5, int n6)
+{
+    ++g_wh_calls_;
+    (void)self; (void)n1; (void)n2; (void)n3; (void)n4; (void)n5; (void)n6;
+    MockWhStream_(0x1234, 0, g_wh_test_path_, g_wh_test_mode_);
+    MockWhClose_(0x1234);
+    return 1;
+}
+static __declspec(noinline) int __fastcall MockWhLoad_(int self, int n1, int n2,
+    int n3, int n4)
+{
+    ++g_wh_calls_;
+    (void)self; (void)n1; (void)n2; (void)n3; (void)n4;
+    MockWhStream_(0x5678, 0, g_wh_test_path_, g_wh_test_mode_);
+    MockWhClose_(0x5678);
+    return 1;
+}
+static __declspec(noinline) void* __fastcall MockWhStream_(int self, int pad,
+    const char* path, const char* mode)
+{
+    ++g_wh_calls_;
+    (void)pad; (void)path; (void)mode;
+    return reinterpret_cast<void*>(self);
+}
+static __declspec(noinline) void __fastcall MockWhClose_(int self)
+{
+    ++g_wh_calls_;
+    (void)self;
+}
+static __declspec(noinline) int __fastcall MockWhStart_(int self)
+{
+    ++g_wh_calls_;
+    return self ^ 0x5151;
+}
+
+static std::vector<std::uint8_t> WhBuildGzip_(const void* data, unsigned size)
+{
+    std::vector<std::uint8_t> out(size + size / 2 + 128);
+    z_stream stream{};
+    bool ok = deflateInit2(&stream, 9, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) == Z_OK;
+    CheckHook_(ok, "deflateInit2 raw");
+    stream.next_in = const_cast<Bytef*>(static_cast<const Bytef*>(data));
+    stream.avail_in = size;
+    stream.next_out = out.data();
+    stream.avail_out = static_cast<uInt>(out.size());
+    CheckHook_(deflate(&stream, Z_FINISH) == Z_STREAM_END, "deflate finish");
+    deflateEnd(&stream);
+    out.resize(stream.total_out);
+    std::vector<std::uint8_t> file = { 0x1F, 0x8B, 0x08, 0, 0, 0, 0, 0, 0, 0 };
+    file.insert(file.end(), out.begin(), out.end());
+    const uLong crc = crc32(0L, Z_NULL, 0);
+    const uLong crcValue = crc32(crc, static_cast<const Bytef*>(data), size);
+    for (int i = 0; i < 4; ++i) file.push_back(
+        static_cast<std::uint8_t>((crcValue >> (8 * i)) & 0xFF));
+    const uLong isize = size;
+    for (int i = 0; i < 4; ++i) file.push_back(
+        static_cast<std::uint8_t>((isize >> (8 * i)) & 0xFF));
+    return file;
+}
+static bool WhWriteWhole_(const char* path, const std::vector<std::uint8_t>& bytes)
+{
+    FILE* file = std::fopen(path, "wb");
+    if (!file) return false;
+    const bool ok = std::fwrite(bytes.data(), 1, bytes.size(), file) == bytes.size();
+    std::fclose(file);
+    return ok;
+}
+static bool WhReadWhole_(const char* path, std::vector<std::uint8_t>& bytes)
+{
+    FILE* file = std::fopen(path, "rb");
+    if (!file) return false;
+    std::fseek(file, 0, SEEK_END);
+    const long size = std::ftell(file);
+    std::fseek(file, 0, SEEK_SET);
+    bytes.resize(static_cast<std::size_t>(size));
+    const bool ok = std::fread(bytes.data(), 1, bytes.size(), file) == bytes.size();
+    std::fclose(file);
+    return ok;
+}
+
+void RunWarehouseHookTests_()
+{
+    // 1) Chained SaveGame-thread entry: replicate production install order
+    //    (TrueRandom first, warehouse second) and verify the context peek.
+    CheckHook_(_PI->WriteHiHook(reinterpret_cast<UINT32>(&MockWhStart_), SPLICE_,
+        EXTENDED_, THISCALL_, reinterpret_cast<void*>(&OnStartGame_)) != nullptr,
+        "install production StartGame first");
+    CheckHook_(_PI->WriteHiHook(reinterpret_cast<UINT32>(&MockWhStart_), SPLICE_,
+        EXTENDED_, THISCALL_, reinterpret_cast<void*>(&OnWhStartGame_)) != nullptr,
+        "chained warehouse StartGame hook accepted");
+    void* startSelf = std::calloc(1, 0x400);
+    CheckHook_(startSelf != nullptr, "warehouse start self storage");
+    WarehouseTestReset_();
+    warehouse::State* st = WarehouseTestState_();
+    st->heroes[9].push_back({ 3, 7 });
+    ObserveScenarioContext_(kScenarioNewGame_);
+    const int selfValue = static_cast<int>(reinterpret_cast<intptr_t>(startSelf));
+    CheckHook_(MockWhStart_(selfValue)
+        == (selfValue ^ 0x5151), "start hook preserves original result");
+    CheckHook_(st->heroes[9].empty() && st->mutationEpoch == 1,
+        "new-game context clears warehouse exactly once");
+    CheckHook_(ConsumeScenarioContext_() == kScenarioUnknown_,
+        "chained peek leaves context consumption to TrueRandom");
+    st->heroes[9].push_back({ 4, 2 });
+    ObserveScenarioContext_(kScenarioLoad_);
+    CheckHook_(MockWhStart_(selfValue)
+        == (selfValue ^ 0x5151), "start hook result on load entry");
+    CheckHook_(!st->heroes[9].empty() && st->heroes[9][0].artifactId == 4
+        && st->heroes[9][0].subtype == 2, "load context preserves warehouse");
+    std::free(startSelf);
+
+    // 2) Save -> load end-to-end through production hooks with real files.
+    CheckHook_(_PI->WriteHiHook(reinterpret_cast<UINT32>(&MockWhSave_), SPLICE_,
+        EXTENDED_, THISCALL_, reinterpret_cast<void*>(&OnSaveGame_)) != nullptr,
+        "install production SaveGame callback");
+    CheckHook_(_PI->WriteHiHook(reinterpret_cast<UINT32>(&MockWhLoad_), SPLICE_,
+        EXTENDED_, THISCALL_, reinterpret_cast<void*>(&OnLoadGame_)) != nullptr,
+        "install production LoadGame callback");
+    CheckHook_(_PI->WriteHiHook(reinterpret_cast<UINT32>(&MockWhStream_), SPLICE_,
+        EXTENDED_, THISCALL_, reinterpret_cast<void*>(&OnStreamOpen_)) != nullptr,
+        "install production stream-open callback");
+    CheckHook_(_PI->WriteHiHook(reinterpret_cast<UINT32>(&MockWhClose_), SPLICE_,
+        EXTENDED_, THISCALL_, reinterpret_cast<void*>(&OnStreamClose_)) != nullptr,
+        "install production stream-close callback");
+
+    wchar_t* tempDir = new wchar_t[kPathCap_ / 2];
+    wchar_t* tempFile = new wchar_t[kPathCap_ / 2];
+    CheckHook_(GetTempPathW(kPathCap_ / 2, tempDir) != 0
+        && GetTempFileNameW(tempDir, L"h3w", 0, tempFile) != 0, "warehouse temp file");
+    char* nativePath = new char[kPathCap_];
+    WideCharToMultiByte(CP_UTF8, 0, tempFile, -1, nativePath, kPathCap_, nullptr, nullptr);
+    g_wh_test_path_ = nativePath;
+
+    const char nativePayload[] = "warehouse native save fixture for offline ABI checks";
+    std::vector<std::uint8_t> native = WhBuildGzip_(nativePayload, sizeof(nativePayload) - 1);
+    CheckHook_(WhWriteWhole_(nativePath, native), "write native save fixture");
+    const std::size_t nativeSize = native.size();
+
+    WarehouseTestReset_();
+    st->heroes[9].push_back({ 21, 5 });
+    g_wh_test_mode_ = "wb";
+    g_wh_calls_ = 0;
+    unsigned esp_before = 0, esp_after = 0;
+    __asm { mov esp_before, esp }
+    const int saveResult = MockWhSave_(1, 2, 3, 4, 5, 6, 7);
+    __asm { mov esp_after, esp }
+    CheckHook_(saveResult == 1, "save hook returns original result");
+    CheckHook_(g_wh_calls_ == 3, "save opens/closes stream exactly once");
+    CheckHook_(esp_before == esp_after, "save hook preserves ESP");
+    std::vector<std::uint8_t> saved;
+    CheckHook_(WhReadWhole_(nativePath, saved), "read post-save file");
+    CheckHook_(saved.size() > nativeSize
+        && std::memcmp(saved.data(), native.data(), nativeSize) == 0,
+        "native prefix preserved byte-for-byte");
+    CheckHook_(saved.size() > 4
+        && std::memcmp(saved.data() + nativeSize, "H3WHBGN1", 8) == 0,
+        "v1 attachment appended directly after native boundary");
+    CheckHook_(WarehouseTestCapturedPath_() == nullptr,
+        "capture window closed and cleaned after save");
+    CheckHook_(WarehouseTestCaptureClosed_() == 1, "close observed on captured stream");
+
+    WarehouseTestReset_();
+    g_wh_test_mode_ = "rb";
+    const int loadResult = MockWhLoad_(9, 1, 2, 3, 4);
+    CheckHook_(loadResult == 1, "load hook returns original result");
+    CheckHook_(st->heroes[9].size() == 1 && st->heroes[9][0].artifactId == 21
+        && st->heroes[9][0].subtype == 5 && st->mutationEpoch == 1,
+        "attachment replaced warehouse state on load");
+
+    // 3) Damaged footer -> lock; further saves must refuse and keep the file.
+    CheckHook_(WhReadWhole_(nativePath, saved), "re-read for damage");
+    saved[saved.size() - 3] ^= 0x01;
+    CheckHook_(WhWriteWhole_(nativePath, saved), "write damaged attachment");
+    WarehouseTestReset_();
+    MockWhLoad_(9, 1, 2, 3, 4);
+    CheckHook_(st->heroes[9].empty() && WarehouseTestLocked_() == 1,
+        "damaged attachment locks and keeps state");
+    std::vector<std::uint8_t> damaged;
+    CheckHook_(WhReadWhole_(nativePath, damaged), "read damaged file size");
+    const std::size_t sizeAfterDamage = damaged.size();
+    st->heroes[3].push_back({ 8, 8 });
+    MockWhSave_(1, 2, 3, 4, 5, 6, 7);
+    std::vector<std::uint8_t> afterLocked;
+    CheckHook_(WhReadWhole_(nativePath, afterLocked), "read after locked save");
+    CheckHook_(afterLocked.size() == sizeAfterDamage, "locked save leaves file unchanged");
+
+    g_wh_test_path_ = nullptr;
+    g_wh_test_mode_ = nullptr;
+    delete[] nativePath;
+    delete[] tempDir;
+    DeleteFileW(tempFile);
+    delete[] tempFile;
+    std::printf("PASS warehouse hooks: chained start context, save/load results and ESP, atomic attachment append via mocks, damaged-attachment lock\n");
+}
 // A patched local function must remain a standard ABI boundary. Otherwise MSVC
 // can preserve volatile registers across a call using its known local body.
 #pragma optimize("", off)
@@ -224,6 +429,7 @@ void RunHookAbiTests_()
         "constructor preserves original returned pointer");
     CheckHook_(ConsumeScenarioContext_() == kScenarioLoad_, "constructor classifies load byte");
     std::free(storage);
+    RunWarehouseHookTests_();
     DeleteCriticalSection(&g_random_audit_lock_);
     std::printf("PASS: installed patcher, production callbacks, 10000 RNG results/seeds, no-draw, SEH once, 1000 full CRT draws, 1000 one-register calls/ESP, constructor return, chain dedup/change\n");
 }

@@ -45,7 +45,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <StructMemberAlignment>1Byte</StructMemberAlignment>
       <AdditionalOptions>/utf-8 /wd4235 /wd4005 /wd4267 /wd4018 /wd4553 /wd4010 /wd4996 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\H3API\single_header;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\H3API\single_header;$(ProjectDir)..\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;WINDOWS_IGNORE_PACKING_MISMATCH;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -58,6 +58,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="H3RndNew.cpp" />
+    <ClCompile Include="..\zlib\inflate.c" />
+    <ClCompile Include="..\zlib\inftrees.c" />
+    <ClCompile Include="..\zlib\inffast.c" />
+    <ClCompile Include="..\zlib\zutil.c" />
+    <ClCompile Include="..\zlib\adler32.c" />
+    <ClCompile Include="..\zlib\crc32.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\H3API\single_header\H3API.hpp" />
@@ -71,6 +77,8 @@
     <ClInclude Include="modules\WarehouseCore.hpp" />
     <ClInclude Include="modules\WarehouseCodec.hpp" />
     <ClInclude Include="modules\WarehouseStore.hpp" />
+    <ClInclude Include="modules\WarehouseNative.hpp" />
+    <ClInclude Include="modules\WarehouseStore.inc.cpp" />
     <ClInclude Include="modules\SettingsDialog.inc.cpp" />
     <ClInclude Include="modules\Entry.inc.cpp" />
     <ClInclude Include="resource.h" />

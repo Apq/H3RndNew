@@ -45,6 +45,7 @@ static void StartPlugin()
         g_true_random, g_true_random_full, g_settings_hotkey_scan);
     InstallTrueRandomHooks_();
     InstallSettingsHooks_();
+    InstallWarehouseHooks_();
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved)
