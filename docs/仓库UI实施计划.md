@@ -170,6 +170,10 @@
 
 - 构建入口：`build.bat`，日志 `D:\logs\dsh\scripts\h3rnd-audit-build\warehouse-ui-stage-a-final.log`；退出码 0，DLL/测试项目合计 0 warning/0 error。
 - 全量回归（阶段 B/C/D 后，2026-10-13 02:31）：仓库 codec 3025、core 1017、store 28、native 30、UI flow 69、UI 状态机+6 指纹 57、UI LoHook ABI、生产 Hook/patcher ABI、outcomes 等全部 PASS，退出码 0。
+- 阶段 E 部署（2026-10-13 02:4x，游戏未运行，仅 HD_Launcher 在）：`deploy.bat` 退出码 0；Release 与 `D:\Heroes3\Heroes3_2026.10.09\_HD3_Data\Packs\热血插件\H3RndNew.dll` SHA256 均为 `ED265209ACA7A197C9149FA96C1312197D5597410CA449910F251DB04C82D81D`。
+- 逆向结论已记入 `H3Note\HD_SOD完整背包弹窗模态与LoHook接入逆向笔记.md` 并提交推送。
+- 游戏内验收清单（用户执行）：打开完整背包确认仓库面板出现与位置不遮挡；第一击背包物品不再原地拿起而进入待放入状态；第二击仓库槽完成放入并自动重开；反向取回（含满 64 拒绝）；翻页 `<`/`>`；Esc/右键关闭后重开正常；存放/取回后存读档回环。
+- `H3RndNew.rc` 保持用户本地未提交修改。
 - 部署入口：`deploy.bat`，退出码 0；Release 与 `D:\Heroes3\Heroes3_2026.10.09\_HD3_Data\Packs\热血插件\H3RndNew.dll` SHA256 均为 `C6A8E047E4720CA64DD32DFF6C5E8BA3E5A1D9E33A684EF7ADFF3933A87C2FA8`。
 - 部署内容只有阶段 A 门卫和生命周期核心；没有注册真实 UI Hook、没有新增控件，不能把本次部署称为仓库 UI 可用。下一阶段必须先完成 `0x039E66` 指令级接入 ABI 证明，再按阶段 B 实现同 dialog 可见外壳。
 - `H3RndNew.rc` 保持用户本地未提交修改。
