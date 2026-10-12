@@ -105,7 +105,8 @@ static void CheckStateMachine_()
 int RunWarehouseUiTests_()
 {
     const std::size_t fingerprints = CountFingerprints_();
-    Check(fingerprints == 4, "all four HD_SOD fingerprints registered");
+    Check(fingerprints == warehouseui::kHsodFingerprintCount_,
+        "all supported HD_SOD fingerprints registered");
     CheckStateMachine_();
     CheckFingerprintBytes_();
     std::printf("PASS warehouse UI state machine and %zu fingerprint gates (%d checks)\n",

@@ -47,6 +47,7 @@ static void StartPlugin()
     InstallSettingsHooks_();
     InstallWarehouseHooks_();
     InstallWarehouseUiStageA_();
+    InstallWarehouseUiStageB_();
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved)

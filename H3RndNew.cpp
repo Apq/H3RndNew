@@ -37,4 +37,6 @@ static int SmallFontHeight_()
 #include "modules/SettingsDialog.inc.cpp"
 #include "modules/WarehouseStore.inc.cpp"
 #include "modules/WarehouseUiStageA.inc.cpp"
+#include "modules/WarehouseUiFlow.hpp"
+#include "modules/WarehouseUiStageB.inc.cpp"
 #include "modules/Entry.inc.cpp"

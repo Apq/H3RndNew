@@ -80,7 +80,9 @@
     <ClInclude Include="modules\WarehouseNative.hpp" />
     <ClInclude Include="modules\WarehouseStore.inc.cpp" />
     <ClInclude Include="modules\WarehouseUi.hpp" />
+    <ClInclude Include="modules\WarehouseUiFlow.hpp" />
     <ClInclude Include="modules\WarehouseUiStageA.inc.cpp" />
+     <ClInclude Include="modules\WarehouseUiStageB.inc.cpp" />
     <ClInclude Include="modules\SettingsDialog.inc.cpp" />
     <ClInclude Include="modules\Entry.inc.cpp" />
     <ClInclude Include="resource.h" />

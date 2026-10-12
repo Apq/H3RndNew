@@ -58,6 +58,7 @@ void RunWarehouseTests_();
 void RunWarehouseCoreTests_();
 void RunWarehouseStoreTests_();
 void RunWarehouseNativeTests_();
+void RunWarehouseUiFlowTests_();
 int RunWarehouseUiTests_();
 int main()
 {
@@ -169,6 +170,7 @@ int main()
     RunWarehouseCoreTests_();
     RunWarehouseStoreTests_();
     RunWarehouseNativeTests_();
+    RunWarehouseUiFlowTests_();
     RunWarehouseUiTests_();
     RunHookAbiTests_();
     // Window authorization is independent of mouse/key messages and elapsed time.

@@ -41,11 +41,19 @@ inline constexpr std::uint8_t kHsodModalCallSig_[] = {
     0xFF, 0xD0, 0x8B, 0x4D, 0xF8, 0xC7, 0x41, 0x08, 0x00, 0x00, 0x00, 0x00 };
 inline constexpr std::uint8_t kHsodModalReturnSig_[] = {
     0xC2, 0x18, 0x00, 0xCC, 0xCC };
+inline constexpr std::uint8_t kHsodModalSiteSig_[] = {
+    0x6A, 0x00, 0xBA, 0x04, 0x00, 0x00, 0x00, 0x6B,
+    0xC2, 0x06, 0x8B, 0x4D, 0xF8, 0x8B, 0x11 };
+inline constexpr std::uint8_t kHsodModalEndSig_[] = {
+    0xC7, 0x41, 0x08, 0x00, 0x00, 0x00, 0x00, 0x8B,
+    0x55, 0xF8 };
 
 inline constexpr HsodFingerprint_ kHsodFingerprints_[] = {
     { "backpack-ctor", 0x039A00u, kHsodCtorSig_, sizeof(kHsodCtorSig_) },
     { "backpack-callback", 0x0395D0u, kHsodCallbackSig_, sizeof(kHsodCallbackSig_) },
+    { "backpack-modal-site", 0x039E66u, kHsodModalSiteSig_, sizeof(kHsodModalSiteSig_) },
     { "backpack-modal-call", 0x039E7Bu, kHsodModalCallSig_, sizeof(kHsodModalCallSig_) },
+    { "backpack-modal-end", 0x039E80u, kHsodModalEndSig_, sizeof(kHsodModalEndSig_) },
     { "backpack-modal-return", 0x039EC0u, kHsodModalReturnSig_, sizeof(kHsodModalReturnSig_) },
 };
 

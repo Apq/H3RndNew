@@ -388,6 +388,8 @@ static bool CatchDefaultException_()
     return false;
 }
 
+#include "warehouse_ui_abi.inc.cpp"
+
 void RunHookAbiTests_()
 {
     // Load the exact deployed patcher before GetPatcher resolves it by basename.
@@ -490,6 +492,7 @@ void RunHookAbiTests_()
     CheckHook_(ConsumeScenarioContext_() == kScenarioLoad_, "constructor classifies load byte");
     std::free(storage);
     RunWarehouseHookTests_();
+    RunWarehouseUiLoAbiTests_();
     DeleteCriticalSection(&g_random_audit_lock_);
     std::printf("PASS: installed patcher, production callbacks, 10000 RNG results/seeds, no-draw, SEH once, 1000 full CRT draws, 1000 one-register calls/ESP, constructor return, chain dedup/change\n");
 }

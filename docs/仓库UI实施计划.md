@@ -144,17 +144,32 @@
 指令级接入确认结论（阶段 A 任务 5，只做静态确认，不安装 Hook）：
 
 - **后置 Hook 不可用**：`0x039A00` 构造函数的模态循环、`+0x7C` 结果读取和析构都在函数体内，在 `0x039EC0` 返回后的 HiHook 里 dialog 已在 `0x039EB8` 附近释放，此时才加控件或读结果都无效。
-- **候选方案（未验证）**：对 `0x039E7B` 的调用点做 HiHook。该处是 `FF D0`（`call eax`），`eax` 取 `[vtable+0x18]` 即 `ShowAndRun(0)`，`ECX` 为当前 dialog 对象、栈参为 0。在替换入口内先完成自有控件添加与本层事件包装，再调用原 `ShowAndRun`，返回后清理包装并读 `dialog+0x7C` 结果，随后交回原生路径走析构。
-- 事件分发候选（未验证）：回调函数指针在构造期（`0x039A44`）已写入对象 `+0x70`，在候选入口内将其替换为本层包装，优先处理自有控件 ID，其余按原 ABI 转发原生回调，保留网络/超时/Esc/右键通道。
-- **阶段 B 必须先用真实 patcher 验证**：该调用点的 HiHook hooktype/calltype 与原参数转发、`[vtable+0x18]` 实参、对象 `+0x70` 可写性和所有权、新增 owned item 对原生 hit-test/刷新的影响。未通过前不注册生产 Hook。
+- **已验证接入**：`0x039E66` 的 LoHook 在 `ShowAndRun(0)` 前执行（`push 0; mov edx,4` 为 displaced 前缀，共 7 字节），读取当前函数栈 `[EBP-8]` dialog（`HookContext::Local(2)`）；`0x039E80` 的 LoHook 在 `ShowAndRun` 返回后、析构（`0x039EB8`）前执行，撤销 callback 包装并清理业务 session。`0x039E7B` 是 `FF D0` 间接调用，patcher `CALL_` 契约只支持 `E8/FF 15`，未安装 HiHook。
+- **事件分发（已实现）**：回调函数指针在构造期（`0x039A44`）写入对象 `+0x70`；阶段 B 在 attach 时保存原指针并替换为 `__stdcall(this,msg)` 包装，自有 ID（30000+）先处理，未识别消息按原 ABI 转发原生回调，保留网络/超时/Esc/右键通道；detach 在 `0x039E80` 恢复原指针。
 - 启动期依赖说明：`WarehouseUiStageA.inc.cpp` 通过 `GetModuleHandleW(L"HD_SOD.dll")` 取宿主模块；插件由 HD_SOD 加载，该模块在加载器表中可查。若实机日志出现模块未加载，说明加载期取句柄时机不成立，再改为首次背包打开时惰性复验，不得据此直接放宽指纹。
 
-当前状态：文档已建立；阶段 A 源码已实现并通过 Release|Win32 Rebuild + 全量审计；阶段 B 未开始。
+## 阶段 B/C/D 执行记录（2026-10-13）
+
+实现（`modules/WarehouseUiStageB.inc.cpp`，约 400 行）：
+
+- 纯模型 `modules/WarehouseUiFlow.hpp`：`Rect/MakeLayout`（405x459 背包、面板 ≥160x459、右优先左次之、8px 间隔、宽 <581 或高 <459 fail closed、3x8 固定分页）与 `Flow`（完整 `NativeBackpack` 快照 + hero/owner/epoch/token 五重身份校验；`Deposit/Retrieve` 先在 try 外准备目标态，校验全过后原子提交，失败零改动；`held` 非空或仓库锁定一律拒绝）。
+- 生产 LoHook：`0x039E66`（模态前 attach）+ `0x039E80`（模态返回 detach），仅在阶段 A 六项指纹全过时安装；两钩各注册独立 CrashGuard id（Modal/ModalEnd/Callback），插件逻辑各自 `__try/__except`，原版路径始终 `EXEC_DEFAULT`。
+- attach：从 `dlg->GetList()` 找原生第一格 hit item（ID 1000）实际坐标作布局锚点（Arg(1)/Arg(2) 语义未确证，仅作缺失回退）；`MakeLayout` 不满足时只记日志、保留原生 UI。自有控件 ID 30000..30123（frame/title/count/24 槽/翻页 hit），全部 `AddItem` 幂等；attach 阶段只写内容不 `Redraw`，模态运行中翻页才重绘。
+- callback 包装：只拦 `ITEM_COMMAND + LBUTTON_DOWN` 且 ID 属于自有区间或原生背包 1000..1063；第一击背包槽仅记录 Flow 选择（不写 held 698AD8/ADC、不 EndDialog），第二击仓库槽提交 `Deposit/Retrieve`；成功后写回 `hero+0x1D4/0x3D4`（与 Flow 紧缩语义一致）、置 `dialog+0x7C = -2` 走原生"重建背包"重开路径，由游戏自己重建 icon/hit/tooltip/状态栏。
+- 离线回归新增：`warehouse_ui_flow_test.cpp`（布局/分页/事务/身份/锁定/held/满包，69 checks）与 `warehouse_ui_abi.inc.cpp`（受控 0x1A 字节窗口复刻 + 真实 patcher LoHook：Local(2)/Arg(1..6)/寄存器与 EFLAGS 恢复/ESP 平衡/FF D0 show 恰一次/SEH 传播/callback ret 8）。
+
+边界与遗留：
+
+- 离线测试不加载 HD_SOD/游戏；`GetID()==1000` 锚点、控件可见性、`-2` 重开链路、HeldArtifact 交互、Esc/右键/外部关闭的实机行为全部留给用户游戏内验收。
+- Arg(1)/Arg(2) 若实机证明是弹窗坐标，可改回直用；当前锚点方案优先原生事实。
+- 用户本地 `H3RndNew.rc` 修改继续保留，不随本阶段提交。
+
+当前状态：阶段 A–D 源码已完成并通过全量离线回归；阶段 E（部署与文档收口）执行中。游戏内验收全部留给用户。
 
 执行结果：
 
 - 构建入口：`build.bat`，日志 `D:\logs\dsh\scripts\h3rnd-audit-build\warehouse-ui-stage-a-final.log`；退出码 0，DLL/测试项目合计 0 warning/0 error。
-- 全量回归：仓库 codec 3025、core 1017、store 28、native 30、UI 状态机 49，生产 Hook/patcher ABI 回归均 PASS。
+- 全量回归（阶段 B/C/D 后，2026-10-13 02:31）：仓库 codec 3025、core 1017、store 28、native 30、UI flow 69、UI 状态机+6 指纹 57、UI LoHook ABI、生产 Hook/patcher ABI、outcomes 等全部 PASS，退出码 0。
 - 部署入口：`deploy.bat`，退出码 0；Release 与 `D:\Heroes3\Heroes3_2026.10.09\_HD3_Data\Packs\热血插件\H3RndNew.dll` SHA256 均为 `C6A8E047E4720CA64DD32DFF6C5E8BA3E5A1D9E33A684EF7ADFF3933A87C2FA8`。
 - 部署内容只有阶段 A 门卫和生命周期核心；没有注册真实 UI Hook、没有新增控件，不能把本次部署称为仓库 UI 可用。下一阶段必须先完成 `0x039E66` 指令级接入 ABI 证明，再按阶段 B 实现同 dialog 可见外壳。
 - `H3RndNew.rc` 保持用户本地未提交修改。
