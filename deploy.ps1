@@ -23,6 +23,12 @@ try {
     Copy-Item $dll $packsDst -Force
     Copy-Item "$PSScriptRoot\H3RndNew.default.ini" $packsDst -Force
     Copy-Item "$PSScriptRoot\使用说明.txt" $packsDst -Force
+    $uiAssets = Join-Path $PSScriptRoot 'whui'
+    $assets = @(Get-ChildItem -LiteralPath $uiAssets -Filter '*.pcx' -File)
+    if ($assets.Count -ne 49) { throw "仓库UI素材不完整：期望49个PCX，实际$($assets.Count)" }
+    $uiDst = Join-Path $packsDst 'whui'
+    New-Item -ItemType Directory -Path $uiDst -Force | Out-Null
+    $assets | Copy-Item -Destination $uiDst -Force
 
     Write-Host "已部署到 $packsDst"
 } catch {

@@ -213,3 +213,28 @@
 6. callback 包装保留原指针调用恰好一次（CrashGuard `__try` 外）；包装失败或 dialog 不匹配时直接透传原生回调。展开态点击宝物 DEF 图标（2000..2063）也进入 Flow 选择（右键仍归原生信息路径）。
 
 构建/部署（2026-10-13 13:09）：全量回归 PASS（UI flow 77 checks 含置顶过滤契约）；Release 与 Packs 部署 SHA256 均为 `C29B7182D0A6A7D0365F07F5EA3D1D2C7B598658EE8F6C026E129533E0097717`。游戏内双层显示、按钮点击、Esc 分流、save-under 恢复效果全部留待用户实机验收。
+
+## 2026-10-13 第五轮：中文标题、四态按钮、批量转移与分类页签
+
+- 标题固定为 **仓库**，不拼英雄名。显示的是当前英雄 `hero.id` 对应的独立库存，不共享其他英雄道具。
+- 仓库、关闭、一键取出、一键放入：各 66×32，采用 H3MegaDesc 的 DEF命中/按压 + PCX视觉模式，复制15个vtable槽，仅替换Draw槽4；普通/按下/悬停高亮/禁用各一张背景及自生成中文文字。按下取原生 `+0x16 & 1`，禁用取 `&0x20`，悬停由 command4绝对坐标维护自有bool，不占用原生SELECTED位。
+- 一键取出在面板 `(8,50)`，一键放入在 `(331,50)`；二者均按**当前活动分类**操作。取出按库存顺序移动到背包空位，最多填到64格，剩余保留；放入只移动背包中匹配项（不含已穿戴装备），保持剩余背包和转移项顺序。无匹配、满包取出、locked/held时显示禁用态。
+- 分类顺序：常规、卷轴、装备、头部、肩部、项链、武器、盾牌、胸甲、戒指、靴子、杂物、机械、魔法书。一次显示4个44×22标题，左右18×22箭头滚动标题窗口；箭头边界钳制。切换分类回到第一页并清除待放入选择。
+- 本轮实现约定：**常规=全部道具的总入口**，其他分类是子集；这不是对“常规”语义的额外用户裁定，若需要排除装备可再调整。卷轴优先按artifactId=1识别，装备包含非负穿戴位置且排除卷轴。左右戒指合并，5个杂物槽合并，机械合并；id=0魔法书也查询GetSlot。
+- 可见列表保存真实库存索引，单件取回与分页使用筛选索引映射，避免筛选后取错物品。增加64个空格透明命中区域，便于空仓库放入。全部owned面板控件统一展开/隐藏，不新增modal或OS置顶。
+- `DepositAll/RetrieveAll` 共用Flow的hero/owner/token/epoch/完整原生快照/locked/held校验；分配和候选整理在提交前，失败无变更，成功只推进一次epoch。完整8字节宝物pair（含卷轴subtype）不拆开。
+- 成功转移仍置 `dlg+0x7C=-2` 并走原生重建重开，刷新背包icon/hit/tooltip；重建保留活动分类与标题滚动偏移，仓库层仍按默认收起。不是在活窗口中只改hero数据冒充刷新。
+- 49张素材由 `scripts/make_whui_assets.py` 从 `whui_src` 的MegaDesc风格参考及Windows中文字体生成；16按钮、28页签、4箭头、1标题，预览 `whui/preview.png`。部署和打包清单增加49个PCX，不把源图/脚本/预览装入游戏。
+- 运行时用生产共用 `WarehouseUiPcx.hpp::DecodePcxRgb` 解码24bit三平面RLE，逐plane处理padding，拒绝坏头/越界/截断且失败不改输出；量化调色板取BkPack.pcx，透明洋红映射索引0。路径只用4MB堆缓冲。49张全部成功才启用新视觉，失败回退中文原生按钮/标题。
+- **资源生命周期**：绘制前检查当前dialog owned-list；detach先恢复owned DEF原vtable及自有PCX创建时原资源指针，再清空对象引用，原生析构负责原资源引用；cached图片不被modal析构反复减引用。静态缓存只存颜色原始字节，避免静态构造游戏palette对象。visual guard与既有15项合计16项，不超CrashGuard注册容量。
+- 第四轮原生右键、网络、超时、0x200/A、未知命令透传及展开/收起Esc分流保持。自有按钮/页签按下只中和原生callback未知ID关闭路径，动作在释放CLICK执行一次。
+
+- 成功转移后必须让**原生 callback 只收到被中和过的消息**（不会进未知ID关闭分支把 `dlg+0x7C` 覆盖成 -1），并在原生返回后重新写 `-2`、`CloseDialog`、返回 `2`。反过来在中和前调 CloseDialog 会被统一中和消除，`-2` 重开不会执行。证据：`CloseDialog` 跳 `0x00491640` 写 `0x200/0xA`，modal loop 只在返回 2 且消息为 `0x200/0xA` 时退出。
+- 布局只规划不平移：`layout.backpack` 必须与原生锚点实际原点一致，否则拒绝 attach 保留原生背包，避免两套命中控件重叠。
+- 两只 modal LoHook 安装失败必须回滚并禁止 attach；仅装一半会留下永不 detach 的 vtable/PCX 裸指针残留。
+
+### 第五轮验证边界（更新）
+
+2026-10-13 18:08：`build.bat` + `H3RND_RUN_AUDIT_TESTS=1` + 游戏真实 `patcher_x86.dll`；主 DLL 与测试工程均 0 warning/0 error，全回归 PASS：codec 3025、core 1017、store 28、native 30、**UI flow 170**（新增回调关闭顺序 6 项与布局 fail-closed 3 项）、PCX 286、UI 状态机/11 指纹 77、LoHook ABI、真实 patcher callback/RNG 并发。回调顺序由生产共用 `modules/WarehouseUiCallback.hpp::CallNativeThenFinalize` 保证并离线回归。部署（游戏未运行，仅 HD_Launcher）Release 与 Packs DLL SHA256 均为 `C8BFD5AF792DBB2735AAECA1570B816FC8D3561C0697491EF41EDAAD4B3F5DF9`，49 张 whui PCX 随包部署，DLL 版本为用户本地 `0.6.2026.1012`。第四轮的中和语义、Esc/右键/网络/超时透传不变。
+
+未运行游戏：四态按钮实际观感、分类切换与批量后的 `-2` 重开、标题透明与 save-under、存档读档回环、以及本次关闭顺序修复的实机效果均由用户验收。`H3RndNew.rc` 为用户本地版本升级修改（0.5→0.6.2026.1012），保持不提交。

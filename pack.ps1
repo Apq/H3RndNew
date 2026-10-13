@@ -36,6 +36,12 @@ $files = @(
     @{ Local = Join-Path $PSScriptRoot '使用说明.txt';         Entry = '热血插件/使用说明.txt' }
 )
 
+$uiAssets = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'whui') -Filter '*.pcx' -File)
+if ($uiAssets.Count -ne 49) { throw "仓库UI素材不完整：期望49个PCX，实际$($uiAssets.Count)" }
+foreach ($asset in $uiAssets) {
+    $files += @{ Local = $asset.FullName; Entry = '热血插件/whui/' + $asset.Name }
+}
+
 $version = Get-PackVersion
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $zipPath = Join-Path $OutputDir "真随机开局_$version.zip"

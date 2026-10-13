@@ -50,6 +50,15 @@ struct Layout {
     std::size_t rows = 0;
 };
 
+// The UI layer does not translate the native backpack controls. Only attach
+// when layout planning preserves the game's actual native position.
+inline constexpr bool LayoutPreservesBackpackPosition(const Layout& layout,
+                                                       int actualX,
+                                                       int actualY) noexcept {
+    return layout.fits && layout.backpack.x == actualX
+        && layout.backpack.y == actualY;
+}
+
 inline constexpr int kBackpackWidth = 405;    // HD 完整背包视觉区（0x01006620 实测）
 inline constexpr int kBackpackHeight = 459;
 inline constexpr int kPanelWidth = 405;       // 仓库面板宽与完整背包一致（用户裁定）
@@ -431,6 +440,130 @@ public:
                     bool locked, bool held) noexcept {
         return Retrieve(index, state, native, count, heroId_, ownerId_,
                         sessionToken_, locked, held);
+    }
+
+    // include is indexed by the complete 64-slot native snapshot, including holes.
+    // Prepare every allocation before committing either inventory or the epoch.
+    Result DepositAll(warehouse::State& state, warehouse::NativeBackpack& native,
+                      int& count, std::int32_t currentHero,
+                      std::int32_t currentOwner, std::uint64_t token,
+                      bool locked, bool held, const std::vector<char>& include,
+                      std::size_t& moved) noexcept {
+        moved = 0;
+        const Result guard = Guard(state, native, count, currentHero,
+                                   currentOwner, token, locked, held);
+        if (guard != Result::Ok) return guard;
+        if (include.size() != warehouse::kBackpackCapacity)
+            return Result::InvalidIndex;
+        auto& target = state.heroes[static_cast<std::size_t>(heroId_)];
+        for (const auto& record : target)
+            if (!IsValidGameRecord(record)) return Result::InvalidRecord;
+        std::size_t moving = 0;
+        for (std::size_t i = 0; i < warehouse::kBackpackCapacity; ++i)
+            if (include[i] && native_[i].artifactId != -1) ++moving;
+        if (moving == 0) return Result::Ok;
+        if (state.mutationEpoch == (std::numeric_limits<std::uint64_t>::max)())
+            return Result::EpochExhausted;
+        if (moving > target.max_size() - target.size())
+            return Result::AllocationFailure;
+
+        warehouse::NativeBackpack nativeAfter;
+        nativeAfter.fill({-1, -1});
+        std::array<warehouse::ArtifactRecord, warehouse::kBackpackCapacity> emptySlots{};
+        std::size_t output = 0;
+        std::size_t emptyCount = 0;
+        for (std::size_t i = 0; i < warehouse::kBackpackCapacity; ++i) {
+            if (native_[i].artifactId == -1) {
+                if (!include[i]) emptySlots[emptyCount++] = native_[i];
+            } else if (!include[i]) {
+                nativeAfter[output++] = native_[i];
+            }
+        }
+        for (std::size_t i = 0; i < emptyCount; ++i)
+            nativeAfter[output + i] = emptySlots[i];
+        warehouse::Backpack targetAfter;
+        try {
+            targetAfter.reserve(target.size() + moving);
+            targetAfter.insert(targetAfter.end(), target.begin(), target.end());
+            for (std::size_t i = 0; i < warehouse::kBackpackCapacity; ++i)
+                if (include[i] && native_[i].artifactId != -1)
+                    targetAfter.push_back(native_[i]);
+        } catch (const std::bad_alloc&) {
+            return Result::AllocationFailure;
+        } catch (const std::length_error&) {
+            return Result::AllocationFailure;
+        }
+
+        target.swap(targetAfter);
+        native = nativeAfter;
+        count = static_cast<int>(output);
+        ++state.mutationEpoch;
+        native_ = nativeAfter;
+        declaredCount_ = count;
+        warehouseEpoch_ = state.mutationEpoch;
+        selected_ = false;
+        committedDeposit_ = false;
+        moved = moving;
+        return Result::Ok;
+    }
+
+    // Consume selected warehouse entries in their original order. Fill native
+    // holes in slot order, preserving every untouched complete native pair.
+    Result RetrieveAll(warehouse::State& state, warehouse::NativeBackpack& native,
+                       int& count, std::int32_t currentHero,
+                       std::int32_t currentOwner, std::uint64_t token,
+                       bool locked, bool held, const std::vector<char>& include,
+                       std::size_t& moved) noexcept {
+        moved = 0;
+        const Result guard = Guard(state, native, count, currentHero,
+                                   currentOwner, token, locked, held);
+        if (guard != Result::Ok) return guard;
+        auto& source = state.heroes[static_cast<std::size_t>(heroId_)];
+        if (include.size() != source.size()) return Result::InvalidIndex;
+        bool hasMatch = false;
+        for (std::size_t i = 0; i < source.size(); ++i) {
+            if (!IsValidGameRecord(source[i])) return Result::InvalidRecord;
+            if (include[i]) hasMatch = true;
+        }
+        if (!hasMatch) return Result::Ok;
+        const std::size_t capacity = warehouse::kBackpackCapacity
+            - static_cast<std::size_t>(count);
+        if (capacity == 0) return Result::CapacityReached;
+        if (state.mutationEpoch == (std::numeric_limits<std::uint64_t>::max)())
+            return Result::EpochExhausted;
+
+        warehouse::NativeBackpack nativeAfter = native_;
+        warehouse::Backpack sourceAfter;
+        std::size_t moving = 0;
+        std::size_t empty = 0;
+        try {
+            sourceAfter.reserve(source.size());
+            for (std::size_t i = 0; i < source.size(); ++i) {
+                if (include[i] && moving < capacity) {
+                    while (nativeAfter[empty].artifactId != -1) ++empty;
+                    nativeAfter[empty++] = source[i];
+                    ++moving;
+                } else {
+                    sourceAfter.push_back(source[i]);
+                }
+            }
+        } catch (const std::bad_alloc&) {
+            return Result::AllocationFailure;
+        } catch (const std::length_error&) {
+            return Result::AllocationFailure;
+        }
+
+        source.swap(sourceAfter);
+        native = nativeAfter;
+        count += static_cast<int>(moving);
+        ++state.mutationEpoch;
+        native_ = nativeAfter;
+        declaredCount_ = count;
+        warehouseEpoch_ = state.mutationEpoch;
+        selected_ = false;
+        committedDeposit_ = false;
+        moved = moving;
+        return Result::Ok;
     }
 
 private:

@@ -1,11 +1,47 @@
 #include "../modules/WarehouseUiFlow.hpp"
 #include "../modules/WarehouseUi.hpp"
+#include "../modules/WarehouseUiCatalog.hpp"
+#include "../modules/WarehouseUiCallback.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <vector>
+
+// 回调顺序纪律（机器码确证，见 H3Note 第10节）：被消费消息必须先中和，让
+// 原生 callback 恰一次收到它；END_DIALOG（0x200/0xA, return 2）与 -2
+// 重建只能在原生返回之后重新下发。CallbackOrder 是该顺序的离线描述，
+// 顺序本身由生产共用 CallNativeThenFinalize 保证。
+namespace warehouseui {
+struct CallbackOrder {
+    int command = 0;
+    int subtype = 0;
+    int itemId = 0;
+    int resultCode = 0;
+};
+constexpr int kMouseOverCommand = 4;
+constexpr int kEndDialogSubtype = 0xA;
+constexpr int kCloseDialogReturn = 2;
+
+inline constexpr CallbackOrder ConsumeForNative(CallbackOrder msg) noexcept {
+    msg.command = kMouseOverCommand;
+    msg.subtype = 0;
+    msg.itemId = 0;
+    return msg;
+}
+inline constexpr CallbackOrder FinalizeRebuildClose(CallbackOrder msg,
+                                                    int rebuildCode) noexcept {
+    msg.command = 0x200;
+    msg.subtype = kEndDialogSubtype;
+    msg.itemId = kEndDialogSubtype;
+    msg.resultCode = rebuildCode;
+    return msg;
+}
+
+} // namespace warehouseui
+
 
 namespace {
 
@@ -67,6 +103,14 @@ void CheckLayoutAndPaging() {
         Check(layout.columns == 8 && layout.page_size == 64,
               "panel mirrors the native 8x8 grid page");
     }
+    Check(warehouseui::LayoutPreservesBackpackPosition(
+              warehouseui::MakeLayout(1024, 600, 8, 0), 8, 0),
+          "native position is accepted when layout preserves it");
+    Check(!warehouseui::LayoutPreservesBackpackPosition(
+              warehouseui::MakeLayout(900, 600, 500, 500), 500, 500)
+              && !warehouseui::LayoutPreservesBackpackPosition(
+                  warehouseui::MakeLayout(900, 600, 500, 500), 8, 100),
+          "fallback requiring native backpack translation fails closed");
     Check(!warehouseui::MakeLayout(833, 600, 8, 0).fits,
           "width below 834 fails closed");
 
@@ -317,6 +361,453 @@ void CheckRetrieveAndCapacity() {
           "epoch max refuses retrieval without wrap");
 }
 
+void CheckRetrieveAllBatch() {
+    State state;
+    state.heroes[5] = {{1, 0}, {1, 0}, {77, 3}, {78, 4}, {79, 5}};
+    NativeBackpack native = EmptyNative();
+    native[1] = {20, 2};
+    native[3] = {21, 3};
+    native[7] = {22, 4};
+    int count = 3;
+    Flow flow(native, count, 5, 8, state.mutationEpoch, 20);
+    std::vector<char> include = {0, 0, 1, 1, 1};
+    std::size_t moved = 99;
+    Check(flow.RetrieveAll(state, native, count, 5, 8, 20, false, false, include,
+                           moved) == Result::Ok,
+          "retrieve all succeeds");
+    Check(moved == 3 && count == 6 && state.mutationEpoch == 1,
+          "retrieve all reports every selected move and bumps epoch once");
+    Check(state.heroes[5] == Backpack{{1, 0}, {1, 0}},
+          "retrieve all removes selected entries in warehouse order");
+    Check(native[0] == ArtifactRecord{77, 3}
+              && native[1] == ArtifactRecord{20, 2}
+              && native[2] == ArtifactRecord{78, 4}
+              && native[3] == ArtifactRecord{21, 3}
+              && native[4] == ArtifactRecord{79, 5}
+              && native[7] == ArtifactRecord{22, 4}
+              && native[5] == ArtifactRecord{-1, -1},
+          "retrieve all fills native holes in slot order with complete pairs");
+    std::vector<char> nextRetrieve(2, 0);
+    nextRetrieve[1] = 1;
+    Check(flow.RetrieveAll(state, native, count, 5, 8, 20, false, false,
+                           nextRetrieve, moved) == Result::Ok && moved == 1,
+          "retrieve all refreshes its snapshot for a second operation");
+    Check(state.heroes[5] == Backpack{{1, 0}}
+              && native[5] == ArtifactRecord{1, 0}
+              && count == 7 && state.mutationEpoch == 2,
+          "refreshed retrieve snapshot commits the next pair atomically");
+
+    // Capacity is partial: only the first matching entries fit, the rest stay.
+    State partialState;
+    partialState.heroes[6] = {{30, 0}, {31, 1}, {32, 2}, {33, 3}, {34, 4}};
+    NativeBackpack partial = NativeWithCount(64);
+    partial[1] = {-1, 123};
+    partial[63] = {-1, 456};
+    const NativeBackpack partialBefore = partial;
+    int partialCount = 62;
+    Flow partialFlow(partial, partialCount, 6, 9, partialState.mutationEpoch, 21);
+    std::vector<char> partialFilter(5, 1);
+    Check(partialFlow.RetrieveAll(partialState, partial, partialCount, 6, 9, 21,
+                                  false, false, partialFilter, moved) == Result::Ok,
+          "retrieve all partially fills remaining capacity");
+    Check(moved == 2 && partialCount == 64 && partialState.mutationEpoch == 1,
+          "partial retrieve moves exactly available capacity");
+    Check(partialState.heroes[6] == Backpack{{32, 2}, {33, 3}, {34, 4}},
+          "partial retrieve retains unmatched tail in original order");
+    Check(partial[1] == ArtifactRecord{30, 0}
+              && partial[63] == ArtifactRecord{31, 1}
+              && partial[0] == partialBefore[0]
+              && partial[2] == partialBefore[2]
+              && partial[62] == partialBefore[62],
+          "partial retrieve preserves untouched native pairs");
+
+    // A matching filter on a full native pack is a hard capacity result and atomic.
+    State fullState;
+    fullState.heroes[0] = {{100, 2}, {101, 3}};
+    NativeBackpack fullNative = NativeWithCount(64);
+    int fullCount = 64;
+    Flow fullFlow(fullNative, fullCount, 0, 1, fullState.mutationEpoch, 22);
+    std::vector<char> fullFilter(2, 1);
+    const State fullBefore = fullState;
+    const NativeBackpack fullNativeBefore = fullNative;
+    Check(fullFlow.RetrieveAll(fullState, fullNative, fullCount, 0, 1, 22, false,
+                               false, fullFilter, moved) == Result::CapacityReached,
+          "full pack rejects retrieve all with any hit");
+    Check(moved == 0 && SameState(fullBefore, fullState)
+              && fullNative == fullNativeBefore && fullCount == 64,
+          "full retrieve-all rejection is atomic");
+
+    // No hit is Ok and does not require epoch advancement.
+    State noHitState;
+    noHitState.heroes[2] = {{40, 0}, {41, 1}};
+    NativeBackpack noHitNative = EmptyNative();
+    noHitNative[0] = {50, 5};
+    int noHitCount = 1;
+    Flow noHitFlow(noHitNative, noHitCount, 2, 4, noHitState.mutationEpoch, 23);
+    std::vector<char> noHit(2, 0);
+    const State noHitBefore = noHitState;
+    const NativeBackpack noHitNativeBefore = noHitNative;
+    Check(noHitFlow.RetrieveAll(noHitState, noHitNative, noHitCount, 2, 4, 23, false,
+                                false, noHit, moved) == Result::Ok && moved == 0,
+          "no-hit retrieve all is ok");
+    Check(SameState(noHitBefore, noHitState)
+              && noHitNative == noHitNativeBefore && noHitCount == 1,
+          "no-hit retrieve all changes nothing");
+
+    // Length, held/locked, cross identity and stale source all fail unchanged.
+    std::vector<char> validFilter(2, 1);
+    std::vector<char> shortFilter(1, 1);
+    const State guardBefore = noHitState;
+    const NativeBackpack guardNativeBefore = noHitNative;
+    const int guardCountBefore = noHitCount;
+    Check(noHitFlow.RetrieveAll(noHitState, noHitNative, noHitCount, 2, 4, 23, false,
+                                false, shortFilter, moved) == Result::InvalidIndex,
+          "retrieve-all filter length mismatch is invalid index");
+    Check(noHitFlow.RetrieveAll(noHitState, noHitNative, noHitCount, 3, 4, 23, false,
+                                false, validFilter, moved) == Result::InvalidHero,
+          "retrieve all cross hero is rejected");
+    Check(noHitFlow.RetrieveAll(noHitState, noHitNative, noHitCount, 2, 5, 23, false,
+                                false, validFilter, moved) == Result::InvalidOwner,
+          "retrieve all cross owner is rejected");
+    Check(noHitFlow.RetrieveAll(noHitState, noHitNative, noHitCount, 2, 4, 24, false,
+                                false, validFilter, moved) == Result::InvalidToken,
+          "retrieve all cross token is rejected");
+    Check(noHitFlow.RetrieveAll(noHitState, noHitNative, noHitCount, 2, 4, 23, true,
+                                false, validFilter, moved) == Result::Locked,
+          "retrieve all locked is rejected");
+    Check(noHitFlow.RetrieveAll(noHitState, noHitNative, noHitCount, 2, 4, 23, false,
+                                true, validFilter, moved) == Result::HeldArtifact,
+          "retrieve all held is rejected");
+    State staleState = noHitState;
+    staleState.heroes[2][0].subtype = 9;
+    ++staleState.mutationEpoch;
+    const State staleBefore = staleState;
+    Check(noHitFlow.RetrieveAll(staleState, noHitNative, noHitCount, 2, 4, 23, false,
+                                false, validFilter, moved) == Result::StaleWarehouse,
+          "retrieve all detects warehouse epoch snapshot drift");
+    Check(SameState(staleBefore, staleState),
+          "retrieve all epoch failure preserves changed warehouse");
+    NativeBackpack staleNative = noHitNative;
+    staleNative[63].subtype = 99;
+    const NativeBackpack staleNativeBefore = staleNative;
+    Check(noHitFlow.RetrieveAll(noHitState, staleNative, noHitCount, 2, 4, 23, false,
+                                false, validFilter, moved) == Result::StaleSelection,
+          "retrieve all checks complete native snapshot including empty subtype");
+    Check(staleNative == staleNativeBefore,
+          "retrieve all stale native failure preserves source argument");
+    Check(SameState(guardBefore, noHitState)
+              && noHitNative == guardNativeBefore && noHitCount == guardCountBefore,
+          "retrieve-all guard failures are atomic");
+
+    State corruptState;
+    corruptState.heroes[0] = {{144, 0}};
+    NativeBackpack corruptNative = EmptyNative();
+    int corruptCount = 0;
+    Flow corruptFlow(corruptNative, corruptCount, 0, 1, 0, 30);
+    std::vector<char> corruptFilter(1, 1);
+    const State corruptBefore = corruptState;
+    Check(corruptFlow.RetrieveAll(corruptState, corruptNative, corruptCount, 0, 1, 30,
+                                  false, false, corruptFilter, moved)
+              == Result::InvalidRecord,
+          "invalid warehouse record is rejected");
+    Check(SameState(corruptBefore, corruptState) && moved == 0,
+          "invalid warehouse record is atomic");
+}
+
+void CheckCatalogFilteringAndScrolling() {
+    using warehouseui::BaseTab;
+    using warehouseui::IsPositionTab;
+    using warehouseui::MakeTabWindow;
+    using warehouseui::kRegularTab;
+    using warehouseui::kTabScrollArtifactId;
+    using warehouseui::kSlotSpellbook;
+    using warehouseui::TabKind;
+
+    Check(kTabScrollArtifactId == 1 && kRegularTab == 0,
+          "scroll id and regular tab constants");
+    Check(warehouseui::TabMatches(TabKind::Regular, kTabScrollArtifactId, -1)
+              && warehouseui::TabMatches(TabKind::Regular, 0, -1)
+              && warehouseui::TabMatches(TabKind::Regular, 143, 5),
+          "regular tab is the all-entries gate");
+    Check(BaseTab(kTabScrollArtifactId, 5) == TabKind::Scroll,
+          "scroll wins over wearable slot");
+    Check(!warehouseui::TabMatches(TabKind::Equipment, kTabScrollArtifactId, 5)
+              && warehouseui::TabMatches(TabKind::Equipment, 40, 3)
+              && !warehouseui::TabMatches(TabKind::Equipment, 41, -2)
+              && !warehouseui::TabMatches(TabKind::Equipment, 42, -1),
+          "equipment excludes scrolls and slot<0");
+    Check(!warehouseui::TabMatches(TabKind::Scroll, 40, -1)
+              && !warehouseui::TabMatches(TabKind::Head, 40, -1)
+              && !warehouseui::TabMatches(TabKind::Spellbook, -1, kSlotSpellbook)
+              && warehouseui::TabMatches(TabKind::Spellbook, 0, kSlotSpellbook),
+          "specific tabs never match empty or cross kind");
+
+    const auto window0 = MakeTabWindow(0, warehouseui::kTabCount, 6);
+    Check(window0.begin == 0 && window0.visible == 6 && window0.canPrev == false
+              && window0.canNext,
+          "tab window starts at regular and scrolls right");
+    const auto windowEnd = MakeTabWindow(99, warehouseui::kTabCount, 6);
+    Check(windowEnd.begin == warehouseui::kTabCount - 6
+              && windowEnd.canNext == false && windowEnd.canPrev,
+          "tab offset clamps to the final six");
+    const auto wide = MakeTabWindow(0, warehouseui::kTabCount, 99);
+    Check(wide.visible == warehouseui::kTabCount && !wide.canPrev && !wide.canNext,
+          "window wider than tab list shows all without arrows");
+    const auto none = MakeTabWindow(0, warehouseui::kTabCount, 0);
+    Check(none.visible == 0 && !none.canPrev && !none.canNext,
+          "zero slot window is closed");
+    const auto four = MakeTabWindow(10, warehouseui::kTabCount, 4);
+    Check(four.begin == 10 && four.visible == 4 && four.canPrev && !four.canNext,
+          "production four-tab window reaches the end");
+    Check(warehouseui::TabOffsetShift(0, -1, 14, 4) == 0
+              && warehouseui::TabOffsetShift(0, 1, 14, 4) == 1
+              && warehouseui::TabOffsetShift(10, 1, 14, 4) == 10
+              && warehouseui::TabOffsetShift(10, -1, 14, 4) == 9,
+          "production tab arrows shift once and clamp both ends");
+    Check(warehouseui::TabOffsetShift((std::numeric_limits<std::size_t>::max)(),
+                                     1, 14, 4) == 10
+              && warehouseui::TabOffsetShift(10, (std::numeric_limits<int>::max)(), 14, 4) == 10
+              && warehouseui::TabOffsetShift(10, (std::numeric_limits<int>::min)(), 14, 4) == 0
+              && warehouseui::TabOffsetShift(10, 1, 14, 0) == 0,
+          "tab shift rejects wraparound and handles zero visible slots");
+    const TabKind expectedSlots[] = {
+        TabKind::Head, TabKind::Shoulders, TabKind::Neck, TabKind::Weapon,
+        TabKind::Shield, TabKind::Torso, TabKind::Ring, TabKind::Ring,
+        TabKind::Feet, TabKind::Misc, TabKind::Misc, TabKind::Misc,
+        TabKind::Misc, TabKind::Machine, TabKind::Machine, TabKind::Machine,
+        TabKind::Machine, TabKind::Spellbook, TabKind::Misc };
+    for (int slot = 0; slot < 19; ++slot)
+        Check(warehouseui::SlotTab(slot) == expectedSlots[slot],
+              "all nineteen original wearable positions map to the correct tab");
+    Check(IsPositionTab(TabKind::Head) && !IsPositionTab(TabKind::Equipment)
+              && !IsPositionTab(TabKind::Regular) && !IsPositionTab(TabKind::Scroll),
+          "position tab classification");
+}
+
+void CheckCallbackCloseOrder() {
+    warehouseui::CallbackOrder msg{0x200, 0xC, 30201, 0};
+    msg = warehouseui::ConsumeForNative(msg);
+    int nativeCalls = 0;
+    int closeCalls = 0;
+    int seenCommand = -1;
+    int finalResult = warehouseui::CallNativeThenFinalize(true,
+        [&] {
+            ++nativeCalls;
+            seenCommand = msg.command;
+            return 1;
+        },
+        [&] {
+            ++closeCalls;
+            msg = warehouseui::FinalizeRebuildClose(msg,
+                warehouseui::kCloseDialogReturn);
+            return msg.resultCode;
+        });
+    Check(finalResult == warehouseui::kCloseDialogReturn
+              && nativeCalls == 1 && closeCalls == 1,
+          "close path runs native once then finalizes once");
+    Check(seenCommand == warehouseui::kMouseOverCommand,
+          "native callback saw the neutralized mouse-over message");
+    Check(msg.command == 0x200 && msg.subtype == warehouseui::kEndDialogSubtype
+              && msg.itemId == warehouseui::kEndDialogSubtype,
+          "end-dialog 0x200/0xA is restored only after the native return");
+
+    int idleNativeCalls = 0;
+    int idleCloseCalls = 0;
+    const int idleResult = warehouseui::CallNativeThenFinalize(false,
+        [&] { ++idleNativeCalls; return 7; },
+        [&] { ++idleCloseCalls; return 2; });
+    Check(idleResult == 7 && idleNativeCalls == 1 && idleCloseCalls == 0,
+          "non-close path passes the native result through untouched");
+}
+
+void CheckDepositAllBatch() {
+    State state;
+    state.heroes[2] = {{90, 1}};
+    NativeBackpack native = EmptyNative();
+    native[0] = {1, 7};
+    native[1] = {-1, 55};
+    native[2] = {42, 9};
+    native[3] = {1, 7};
+    native[4] = {-1, 56};
+    native[10] = {1, 69};
+    int count = 4;
+    Flow flow(native, count, 2, 6, state.mutationEpoch, 44);
+
+    std::vector<char> include(64, 0);
+    include[0] = 1;
+    include[3] = 1;
+    include[10] = 1;
+    std::size_t moved = 99;
+    Check(flow.DepositAll(state, native, count, 2, 6, 44, false, false, include,
+                          moved) == Result::Ok,
+          "deposit all succeeds");
+    Check(moved == 3 && count == 1 && state.mutationEpoch == 1,
+          "deposit all reports moved count and bumps epoch once");
+    Check(state.heroes[2] == Backpack{{90, 1}, {1, 7}, {1, 7}, {1, 69}},
+          "deposit all preserves duplicate scrolls and warehouse append order");
+    Check(native[0] == ArtifactRecord{42, 9}
+              && native[1] == ArtifactRecord{-1, 55}
+              && native[2] == ArtifactRecord{-1, 56}
+              && native[3] == ArtifactRecord{-1, -1}
+              && native[61] == ArtifactRecord{-1, -1},
+          "deposit all compacts and keeps all existing empty subtypes in order");
+
+    // Reuse the same Flow, proving its complete snapshot was refreshed.
+    std::vector<char> remaining(64, 0);
+    remaining[0] = 1;
+    Check(flow.DepositAll(state, native, count, 2, 6, 44, false, false,
+                          remaining, moved) == Result::Ok,
+          "second deposit all uses refreshed snapshot");
+    Check(moved == 1 && count == 0 && state.mutationEpoch == 2
+              && state.heroes[2].back() == ArtifactRecord{42, 9},
+          "refreshed snapshot accepts the next batch");
+    Check(native[0] == ArtifactRecord{-1, 55}
+              && native[1] == ArtifactRecord{-1, 56},
+          "existing empty subtype remains after second batch");
+
+    // No match at all: Ok, moved 0, no epoch, no change.
+    State idleState;
+    idleState.heroes[7] = {{5, 5}};
+    NativeBackpack idle = EmptyNative();
+    idle[0] = {42, 0};
+    idle[64 - 1] = {43, 1};
+    int idleCount = 2;
+    Flow idleFlow(idle, idleCount, 7, 5, idleState.mutationEpoch, 77);
+    std::vector<char> none(64, 0);
+    std::vector<char> wrongSlots(64, 0);
+    wrongSlots[30] = 1;
+    const State idleBefore = idleState;
+    const NativeBackpack idleNativeBefore = idle;
+    const int idleCountBefore = idleCount;
+    std::size_t idleMoved = 99;
+    Check(idleFlow.DepositAll(idleState, idle, idleCount, 7, 5, 77, false, false,
+                              none, idleMoved) == Result::Ok && idleMoved == 0,
+          "all-excluded deposit all is ok with zero moves");
+    Check(idleFlow.DepositAll(idleState, idle, idleCount, 7, 5, 77, false, false,
+                              wrongSlots, idleMoved) == Result::Ok && idleMoved == 0,
+          "hole-only selection moves nothing");
+    Check(SameState(idleBefore, idleState) && idle == idleNativeBefore
+              && idleCount == idleCountBefore,
+          "zero-move deposit all changes nothing");
+
+    // Filter length mismatch.
+    std::vector<char> shortFilter(63, 0);
+    std::vector<char> longFilter(65, 0);
+    std::vector<char> emptyFilter;
+    std::size_t badMoved = 99;
+    Check(idleFlow.DepositAll(idleState, idle, idleCount, 7, 5, 77, false, false,
+                              shortFilter, badMoved) == Result::InvalidIndex
+              && idleFlow.DepositAll(idleState, idle, idleCount, 7, 5, 77, false,
+                                     false, longFilter, badMoved) == Result::InvalidIndex
+              && idleFlow.DepositAll(idleState, idle, idleCount, 7, 5, 77, false,
+                                     false, emptyFilter, badMoved) == Result::InvalidIndex,
+          "filter length must equal 64");
+    Check(SameState(idleBefore, idleState) && idle == idleNativeBefore
+              && idleCount == idleCountBefore,
+          "filter length failure changes nothing");
+
+    // Guard failures, including stale snapshot after a successful batch.
+    State guardState;
+    guardState.heroes[4] = {{8, 8}};
+    NativeBackpack guardNative = EmptyNative();
+    guardNative[0] = {10, 0};
+    guardNative[1] = {11, 1};
+    guardNative[2] = {12, 2};
+    int guardCount = 3;
+    Flow guard(guardNative, guardCount, 4, 9, guardState.mutationEpoch, 31);
+    std::vector<char> guardFilter(64, 0);
+    guardFilter[0] = 1;
+    guardFilter[1] = 1;
+    guardFilter[2] = 1;
+    const State guardBefore = guardState;
+    const NativeBackpack guardNativeBefore = guardNative;
+    const int guardCountBefore = guardCount;
+    std::size_t guardMoved = 99;
+    Check(guard.DepositAll(guardState, guardNative, guardCount, 5, 9, 31, false,
+                           false, guardFilter, guardMoved) == Result::InvalidHero,
+          "deposit all cross-hero is rejected");
+    Check(guard.DepositAll(guardState, guardNative, guardCount, 4, 10, 31, false,
+                           false, guardFilter, guardMoved) == Result::InvalidOwner,
+          "deposit all cross-owner is rejected");
+    Check(guard.DepositAll(guardState, guardNative, guardCount, 4, 9, 32, false,
+                           false, guardFilter, guardMoved) == Result::InvalidToken,
+          "deposit all cross-token is rejected");
+    Check(guard.DepositAll(guardState, guardNative, guardCount, 4, 9, 31, true,
+                           false, guardFilter, guardMoved) == Result::Locked,
+          "deposit all locked is rejected");
+    Check(guard.DepositAll(guardState, guardNative, guardCount, 4, 9, 31, false,
+                           true, guardFilter, guardMoved) == Result::HeldArtifact,
+          "deposit all held is rejected");
+    NativeBackpack drifted = guardNativeBefore;
+    drifted[1].subtype = 77;
+    Check(guard.DepositAll(guardState, drifted, guardCount, 4, 9, 31, false, false,
+                           guardFilter, guardMoved) == Result::StaleSelection,
+          "deposit all source drift is rejected");
+    State driftedEpoch = guardBefore;
+    ++driftedEpoch.mutationEpoch;
+    const State driftedEpochBefore = driftedEpoch;
+    Check(guard.DepositAll(driftedEpoch, guardNative, guardCount, 4, 9, 31, false,
+                           false, guardFilter, guardMoved) == Result::StaleWarehouse,
+          "deposit all epoch drift is rejected");
+    Check(SameState(driftedEpochBefore, driftedEpoch),
+          "deposit all stale epoch does not mutate state");
+    Check(SameState(guardBefore, guardState)
+              && guardNative == guardNativeBefore
+              && guardCount == guardCountBefore && guardMoved == 0,
+          "deposit all guard failures are atomic");
+
+    // Full 64 selected: entire pack compacts out, epoch advances once.
+    State fullState;
+    fullState.heroes[0] = {{1, 1}};
+    NativeBackpack full = NativeWithCount(64);
+    int fullCount = 64;
+    std::vector<char> fullFilter(64, 1);
+    std::size_t fullMoved = 0;
+    Flow fullFlow(full, fullCount, 0, 1, fullState.mutationEpoch, 51);
+    Check(fullFlow.DepositAll(fullState, full, fullCount, 0, 1, 51, false, false,
+                              fullFilter, fullMoved) == Result::Ok,
+          "deposit all accepts a full 64 selection");
+    Check(fullMoved == 64 && fullCount == 0 && fullState.mutationEpoch == 1
+              && fullState.heroes[0].size() == 65
+              && fullState.heroes[0].back() == ArtifactRecord{73, 63},
+          "full batch appends every occupied pair in slot order");
+    bool anyLeft = false;
+    for (const auto& slot : full)
+        if (slot.artifactId != -1) anyLeft = true;
+    Check(!anyLeft, "full batch leaves no occupied native slot");
+
+    // Exhausted epoch refuses either nonempty transaction, without wrapping.
+    State exhausted;
+    exhausted.mutationEpoch = (std::numeric_limits<std::uint64_t>::max)();
+    exhausted.heroes[1] = {{30, 1}, {31, 2}};
+    NativeBackpack epochNative = EmptyNative();
+    int epochCount = 0;
+    const State epochBefore = exhausted;
+    const NativeBackpack epochNativeBefore = epochNative;
+    Flow epochFlow(epochNative, epochCount, 1, 2, exhausted.mutationEpoch, 62);
+    std::vector<char> retrieveFilter(2, 1);
+    Check(epochFlow.RetrieveAll(exhausted, epochNative, epochCount, 1, 2, 62,
+                                false, false, retrieveFilter, moved)
+              == Result::EpochExhausted && moved == 0,
+          "exhausted epoch refuses batch retrieval");
+    Check(SameState(epochBefore, exhausted) && epochNative == epochNativeBefore
+              && epochCount == 0 && epochFlow.WarehouseEpoch() == exhausted.mutationEpoch,
+          "exhausted retrieval preserves state/native/count/snapshot");
+    NativeBackpack depNative = EmptyNative();
+    depNative[0] = {40, (std::numeric_limits<std::int32_t>::min)()};
+    depNative[1] = {41, (std::numeric_limits<std::int32_t>::max)()};
+    const NativeBackpack depNativeBefore = depNative;
+    int depCount = 2;
+    Flow depFlow(depNative, depCount, 1, 2, exhausted.mutationEpoch, 63);
+    std::vector<char> depFilter(64, 1);
+    Check(depFlow.DepositAll(exhausted, depNative, depCount, 1, 2, 63, false, false,
+                             depFilter, moved) == Result::EpochExhausted && moved == 0,
+          "exhausted epoch refuses batch deposit");
+    Check(SameState(epochBefore, exhausted) && depNative == depNativeBefore
+              && depCount == 2 && depFlow.Native() == depNativeBefore,
+          "exhausted deposit preserves state/native/count/snapshot");
+}
+
 } // namespace
 
 void RunWarehouseUiFlowTests_() {
@@ -326,6 +817,10 @@ void RunWarehouseUiFlowTests_() {
     CheckDepositAndCompaction();
     CheckDepositGuards();
     CheckRetrieveAndCapacity();
+    CheckRetrieveAllBatch();
+    CheckDepositAllBatch();
+    CheckCallbackCloseOrder();
+    CheckCatalogFilteringAndScrolling();
 
     // 置顶仓库层的点击过滤契约（纯函数，离线可回归）：
     using warehouseui::IsNativeBackpackId;

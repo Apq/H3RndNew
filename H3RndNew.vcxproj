@@ -81,6 +81,10 @@
     <ClInclude Include="modules\WarehouseStore.inc.cpp" />
     <ClInclude Include="modules\WarehouseUi.hpp" />
     <ClInclude Include="modules\WarehouseUiFlow.hpp" />
+    <ClInclude Include="modules\WarehouseUiCatalog.hpp" />
+    <ClInclude Include="modules\WarehouseUiPcx.hpp" />
+    <ClInclude Include="modules\WarehouseUiCallback.hpp" />
+    <ClInclude Include="modules\WarehouseUiButtons.inc.cpp" />
     <ClInclude Include="modules\WarehouseUiStageA.inc.cpp" />
      <ClInclude Include="modules\WarehouseUiStageB.inc.cpp" />
     <ClInclude Include="modules\SettingsDialog.inc.cpp" />
