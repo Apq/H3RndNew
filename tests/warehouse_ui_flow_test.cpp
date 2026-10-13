@@ -1,4 +1,5 @@
 #include "../modules/WarehouseUiFlow.hpp"
+#include "../modules/WarehouseUi.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -325,6 +326,34 @@ void RunWarehouseUiFlowTests_() {
     CheckDepositAndCompaction();
     CheckDepositGuards();
     CheckRetrieveAndCapacity();
+
+    // 置顶仓库层的点击过滤契约（纯函数，离线可回归）：
+    using warehouseui::IsNativeBackpackId;
+    using warehouseui::IsWarehouseLeftGesture;
+    using warehouseui::SuppressPinnedClose;
+    Check(IsWarehouseLeftGesture(0x200, 0xC) && IsWarehouseLeftGesture(0x200, 0xD)
+              && !IsWarehouseLeftGesture(0x200, 0xE) && !IsWarehouseLeftGesture(0x200, 0xA)
+              && !IsWarehouseLeftGesture(2, 1),
+          "left gesture only covers 0x200/C and 0x200/D");
+    Check(IsNativeBackpackId(1000) && IsNativeBackpackId(1063)
+              && IsNativeBackpackId(2000) && IsNativeBackpackId(2063)
+              && !IsNativeBackpackId(999) && !IsNativeBackpackId(1064)
+              && !IsNativeBackpackId(30000) && !IsNativeBackpackId(30200),
+          "native backpack ids cover 1000..1063 and 2000..2063 only");
+    Check(!SuppressPinnedClose(false, 0x200, 0xC, 777)
+              && !SuppressPinnedClose(false, 0x200, 0xD, 0),
+          "collapsed state never suppresses native close");
+    Check(SuppressPinnedClose(true, 0x200, 0xD, 0)
+              && SuppressPinnedClose(true, 0x200, 0xC, 777)
+              && !SuppressPinnedClose(true, 0x200, 0xC, 1005)
+              && !SuppressPinnedClose(true, 0x200, 0xC, 2005)
+              && SuppressPinnedClose(true, 0x200, 0xC, 30004)
+              && SuppressPinnedClose(true, 0x200, 0xC, 30200)
+              && !SuppressPinnedClose(true, 0x200, 0xE, 777)
+              && !SuppressPinnedClose(true, 2, 1, 0)
+              && !SuppressPinnedClose(true, 0x200, 0xA, 777),
+          "expanded state suppresses outside left gestures but keeps native ids, right-click, Esc");
+
     if (g_failures != 0) {
         std::fprintf(stderr, "warehouse UI flow: %d/%d checks failed\n",
                      g_failures, g_checks);

@@ -48,7 +48,34 @@ inline constexpr std::uint8_t kHsodModalEndSig_[] = {
     0xC7, 0x41, 0x08, 0x00, 0x00, 0x00, 0x00, 0x8B,
     0x55, 0xF8 };
 
+// 整窗背景工厂入口（避开含重定位的cookie绝对地址）及返回item+画布赋值/ret14。
+inline constexpr std::uint8_t kHsodSkinEntrySig_[] = {
+    0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x40 };
+inline constexpr std::uint8_t kHsodSkinCanvasSig_[] = { 0x89, 0x78, 0x30 };
+inline constexpr std::uint8_t kHsodSkinReturnSig_[] = { 0xC2, 0x14, 0x00 };
+
+inline constexpr std::uint8_t kHsodPostCommonSig_[] = { 0xB8, 0x04, 0x00, 0x00, 0x00 };
+inline constexpr std::uint8_t kHsodCallbackExitSig_[] = { 0x8B, 0x45, 0xD8, 0x8B, 0xE5, 0x5D, 0xC2, 0x08, 0x00 };
+
+// 游戏内固定层：只过滤左键手势，绝不屏蔽EndDialog/右键/Esc/网络命令。
+inline bool IsWarehouseLeftGesture(int command, int subtype) noexcept {
+    return command == 0x200 && (subtype == 0xC || subtype == 0xD);
+}
+inline bool IsNativeBackpackId(int id) noexcept {
+    return (id >= 1000 && id < 1064) || (id >= 2000 && id < 2064);
+}
+inline bool SuppressPinnedClose(bool expanded, int command, int subtype, int id) noexcept {
+    if (!expanded || command != 0x200) return false;
+    if (subtype == 0xD) return true;
+    return subtype == 0xC && !IsNativeBackpackId(id);
+}
+
 inline constexpr HsodFingerprint_ kHsodFingerprints_[] = {
+    { "backpack-post-common", 0x0396ABu, kHsodPostCommonSig_, sizeof(kHsodPostCommonSig_) },
+    { "backpack-callback-exit", 0x0399F4u, kHsodCallbackExitSig_, sizeof(kHsodCallbackExitSig_) },
+    { "skin-entry", 0x0FADB0u, kHsodSkinEntrySig_, sizeof(kHsodSkinEntrySig_) },
+    { "skin-canvas", 0x0FB14Au, kHsodSkinCanvasSig_, sizeof(kHsodSkinCanvasSig_) },
+    { "skin-return", 0x0FB15Du, kHsodSkinReturnSig_, sizeof(kHsodSkinReturnSig_) },
     { "backpack-ctor", 0x039A00u, kHsodCtorSig_, sizeof(kHsodCtorSig_) },
     { "backpack-callback", 0x0395D0u, kHsodCallbackSig_, sizeof(kHsodCallbackSig_) },
     { "backpack-modal-site", 0x039E66u, kHsodModalSiteSig_, sizeof(kHsodModalSiteSig_) },
