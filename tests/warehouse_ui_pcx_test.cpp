@@ -275,7 +275,7 @@ void CheckRealAssets_()
             names.push_back(std::string("btn_") + button
                 + static_cast<char>('0' + state) + ".pcx");
     }
-    for (int tab = 0; tab < 14; ++tab) {
+    for (int tab = 0; tab < 12; ++tab) {
         char name[32];
         std::snprintf(name, sizeof(name), "tab%02dn.pcx", tab);
         names.push_back(name);
@@ -286,8 +286,7 @@ void CheckRealAssets_()
     names.push_back("arrow_prev1.pcx");
     names.push_back("arrow_next0.pcx");
     names.push_back("arrow_next1.pcx");
-    names.push_back("title.pcx");
-    Check_(names.size() == 49, "49 warehouse PCX names listed");
+    Check_(names.size() == 44, "44 warehouse PCX names listed");
 
     std::size_t nonEmpty = 0;
     for (const std::string& name : names) {
@@ -295,8 +294,8 @@ void CheckRealAssets_()
         Check_(ReadFile_(std::string("whui/") + name, file), "read warehouse PCX");
         int width = 0;
         int height = 0;
-        if (name == "title.pcx") {
-            width = 72; height = 26;
+        if (name.find("btn_close") == 0) {
+            width = 24; height = 24;
         } else if (name.find("btn_") == 0) {
             width = 66; height = 32;
         } else if (name.find("tab") == 0) {
@@ -321,7 +320,7 @@ void CheckRealAssets_()
         Check_(hasNonZero && hasMultipleColors, "warehouse PCX has color distribution");
         ++nonEmpty;
     }
-    Check_(nonEmpty == 49, "all 49 warehouse PCX files decoded");
+    Check_(nonEmpty == 44, "all 44 warehouse PCX files decoded");
 }
 
 } // namespace
@@ -331,6 +330,6 @@ void RunWarehouseUiPcxTests_()
     CheckFixtureDecoding_();
     CheckFailureFixtures_();
     CheckRealAssets_();
-    std::printf("PASS warehouse UI PCX: 49 assets and malformed-stream gates (%d checks)\n",
+    std::printf("PASS warehouse UI PCX: 44 assets and malformed-stream gates (%d checks)\n",
                 g_checks_);
 }

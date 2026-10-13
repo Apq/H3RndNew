@@ -10,38 +10,9 @@
 #include <limits>
 #include <vector>
 
-// 回调顺序纪律（机器码确证，见 H3Note 第10节）：被消费消息必须先中和，让
-// 原生 callback 恰一次收到它；END_DIALOG（0x200/0xA, return 2）与 -2
-// 重建只能在原生返回之后重新下发。CallbackOrder 是该顺序的离线描述，
-// 顺序本身由生产共用 CallNativeThenFinalize 保证。
-namespace warehouseui {
-struct CallbackOrder {
-    int command = 0;
-    int subtype = 0;
-    int itemId = 0;
-    int resultCode = 0;
-};
-constexpr int kMouseOverCommand = 4;
-constexpr int kEndDialogSubtype = 0xA;
-constexpr int kCloseDialogReturn = 2;
-
-inline constexpr CallbackOrder ConsumeForNative(CallbackOrder msg) noexcept {
-    msg.command = kMouseOverCommand;
-    msg.subtype = 0;
-    msg.itemId = 0;
-    return msg;
-}
-inline constexpr CallbackOrder FinalizeRebuildClose(CallbackOrder msg,
-                                                    int rebuildCode) noexcept {
-    msg.command = 0x200;
-    msg.subtype = kEndDialogSubtype;
-    msg.itemId = kEndDialogSubtype;
-    msg.resultCode = rebuildCode;
-    return msg;
-}
-
-} // namespace warehouseui
-
+// Round-6 callback policy: a consumed move is refreshed in place; the
+// native callback is still invoked exactly once and never finalizes a close.
+namespace warehouseui {} // namespace warehouseui
 
 namespace {
 
@@ -538,9 +509,12 @@ void CheckCatalogFilteringAndScrolling() {
           "equipment excludes scrolls and slot<0");
     Check(!warehouseui::TabMatches(TabKind::Scroll, 40, -1)
               && !warehouseui::TabMatches(TabKind::Head, 40, -1)
-              && !warehouseui::TabMatches(TabKind::Spellbook, -1, kSlotSpellbook)
-              && warehouseui::TabMatches(TabKind::Spellbook, 0, kSlotSpellbook),
-          "specific tabs never match empty or cross kind");
+              && !warehouseui::TabMatches(TabKind::Regular, 40, 13)
+              && !warehouseui::TabMatches(TabKind::Regular, 40, 14)
+              && !warehouseui::TabMatches(TabKind::Regular, 40, 15)
+              && !warehouseui::TabMatches(TabKind::Regular, 40, 16)
+              && !warehouseui::TabMatches(TabKind::Regular, 40, 17),
+          "machine and spellbook slots never appear in warehouse tabs");
 
     const auto window0 = MakeTabWindow(0, warehouseui::kTabCount, 6);
     Check(window0.begin == 0 && window0.visible == 6 && window0.canPrev == false
@@ -556,19 +530,19 @@ void CheckCatalogFilteringAndScrolling() {
     const auto none = MakeTabWindow(0, warehouseui::kTabCount, 0);
     Check(none.visible == 0 && !none.canPrev && !none.canNext,
           "zero slot window is closed");
-    const auto four = MakeTabWindow(10, warehouseui::kTabCount, 4);
-    Check(four.begin == 10 && four.visible == 4 && four.canPrev && !four.canNext,
+    const auto four = MakeTabWindow(8, warehouseui::kTabCount, 4);
+    Check(four.begin == 8 && four.visible == 4 && four.canPrev && !four.canNext,
           "production four-tab window reaches the end");
-    Check(warehouseui::TabOffsetShift(0, -1, 14, 4) == 0
-              && warehouseui::TabOffsetShift(0, 1, 14, 4) == 1
-              && warehouseui::TabOffsetShift(10, 1, 14, 4) == 10
-              && warehouseui::TabOffsetShift(10, -1, 14, 4) == 9,
+    Check(warehouseui::TabOffsetShift(0, -1, 12, 4) == 0
+              && warehouseui::TabOffsetShift(0, 1, 12, 4) == 1
+              && warehouseui::TabOffsetShift(8, 1, 12, 4) == 8
+              && warehouseui::TabOffsetShift(8, -1, 12, 4) == 7,
           "production tab arrows shift once and clamp both ends");
     Check(warehouseui::TabOffsetShift((std::numeric_limits<std::size_t>::max)(),
-                                     1, 14, 4) == 10
-              && warehouseui::TabOffsetShift(10, (std::numeric_limits<int>::max)(), 14, 4) == 10
-              && warehouseui::TabOffsetShift(10, (std::numeric_limits<int>::min)(), 14, 4) == 0
-              && warehouseui::TabOffsetShift(10, 1, 14, 0) == 0,
+                                     1, 12, 4) == 8
+              && warehouseui::TabOffsetShift(8, (std::numeric_limits<int>::max)(), 12, 4) == 8
+              && warehouseui::TabOffsetShift(8, (std::numeric_limits<int>::min)(), 12, 4) == 0
+              && warehouseui::TabOffsetShift(8, 1, 12, 0) == 0,
           "tab shift rejects wraparound and handles zero visible slots");
     const TabKind expectedSlots[] = {
         TabKind::Head, TabKind::Shoulders, TabKind::Neck, TabKind::Weapon,
@@ -579,45 +553,41 @@ void CheckCatalogFilteringAndScrolling() {
     for (int slot = 0; slot < 19; ++slot)
         Check(warehouseui::SlotTab(slot) == expectedSlots[slot],
               "all nineteen original wearable positions map to the correct tab");
+    Check(warehouseui::TabMatches(TabKind::Misc, 40, 9)
+              && warehouseui::TabMatches(TabKind::Misc, 40, 12)
+              && warehouseui::TabMatches(TabKind::Misc, 40, 18)
+              && warehouseui::TabMatches(TabKind::Equipment, 40, 9)
+              && !warehouseui::TabMatches(TabKind::Misc, 40, 13)
+              && !warehouseui::TabMatches(TabKind::Misc, 40, 17),
+          "misc slots feed both misc and equipment; machine/spellbook never match");
     Check(IsPositionTab(TabKind::Head) && !IsPositionTab(TabKind::Equipment)
               && !IsPositionTab(TabKind::Regular) && !IsPositionTab(TabKind::Scroll),
           "position tab classification");
 }
 
-void CheckCallbackCloseOrder() {
-    warehouseui::CallbackOrder msg{0x200, 0xC, 30201, 0};
-    msg = warehouseui::ConsumeForNative(msg);
+void CheckRound6CallbackAndIcons() {
     int nativeCalls = 0;
-    int closeCalls = 0;
-    int seenCommand = -1;
-    int finalResult = warehouseui::CallNativeThenFinalize(true,
-        [&] {
-            ++nativeCalls;
-            seenCommand = msg.command;
-            return 1;
-        },
-        [&] {
-            ++closeCalls;
-            msg = warehouseui::FinalizeRebuildClose(msg,
-                warehouseui::kCloseDialogReturn);
-            return msg.resultCode;
-        });
-    Check(finalResult == warehouseui::kCloseDialogReturn
-              && nativeCalls == 1 && closeCalls == 1,
-          "close path runs native once then finalizes once");
-    Check(seenCommand == warehouseui::kMouseOverCommand,
-          "native callback saw the neutralized mouse-over message");
-    Check(msg.command == 0x200 && msg.subtype == warehouseui::kEndDialogSubtype
-              && msg.itemId == warehouseui::kEndDialogSubtype,
-          "end-dialog 0x200/0xA is restored only after the native return");
-
-    int idleNativeCalls = 0;
-    int idleCloseCalls = 0;
-    const int idleResult = warehouseui::CallNativeThenFinalize(false,
-        [&] { ++idleNativeCalls; return 7; },
-        [&] { ++idleCloseCalls; return 2; });
-    Check(idleResult == 7 && idleNativeCalls == 1 && idleCloseCalls == 0,
-          "non-close path passes the native result through untouched");
+    const int result = warehouseui::CallNativeOnce([&] {
+        ++nativeCalls;
+        return 7;
+    });
+    Check(result == 7 && nativeCalls == 1,
+          "move refresh calls native callback exactly once");
+    const auto empty = warehouseui::MakeIconView(-1, 9, true);
+    const auto artifact = warehouseui::MakeIconView(42, 9, true);
+    const auto scroll = warehouseui::MakeIconView(1, 9, true);
+    const auto ordinaryScroll = warehouseui::MakeIconView(1, 9, false);
+    Check(!empty.visible && artifact.visible && artifact.kind == 0
+              && artifact.frame == 42,
+          "empty and ordinary artifacts map to artifact.def correctly");
+    Check(scroll.visible && scroll.kind == 1 && scroll.frame == 9
+              && ordinaryScroll.kind == 0 && ordinaryScroll.frame == 1,
+          "scrolls select def.SpScrArt only when enabled");
+    Check(warehouseui::ConsumeWarehouseDown(30201)
+              && !warehouseui::ConsumeWarehouseDown(1000)
+              && warehouseui::ExecutesWarehouseAction(0xD)
+              && !warehouseui::ExecutesWarehouseAction(0xC),
+          "warehouse controls consume DOWN and commit one CLICK");
 }
 
 void CheckDepositAllBatch() {
@@ -819,7 +789,7 @@ void RunWarehouseUiFlowTests_() {
     CheckRetrieveAndCapacity();
     CheckRetrieveAllBatch();
     CheckDepositAllBatch();
-    CheckCallbackCloseOrder();
+    CheckRound6CallbackAndIcons();
     CheckCatalogFilteringAndScrolling();
 
     // 置顶仓库层的点击过滤契约（纯函数，离线可回归）：

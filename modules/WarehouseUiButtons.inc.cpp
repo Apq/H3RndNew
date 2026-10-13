@@ -10,7 +10,13 @@ static constexpr int kWhUiBtnWidth_ = 66, kWhUiBtnHeight_ = 32;
 static constexpr int kWhUiTabWidth_ = 44, kWhUiTabHeight_ = 22;
 static constexpr int kWhUiTabSlotCount_ = 4;
 static constexpr int kWhUiArrowWidth_ = 18, kWhUiArrowHeight_ = 22;
-static constexpr int kWhUiTitleWidth_ = 72, kWhUiTitleHeight_ = 26;
+static constexpr int kWhUiCloseWidth_ = 24, kWhUiCloseHeight_ = 24;
+static constexpr int WarehouseUiButtonWidth_(int kind) noexcept {
+    return kind == 1 ? kWhUiCloseWidth_ : kWhUiBtnWidth_;
+}
+static constexpr int WarehouseUiButtonHeight_(int kind) noexcept {
+    return kind == 1 ? kWhUiCloseHeight_ : kWhUiBtnHeight_;
+}
 // 共用一个绘制guard，使全插件注册总数不超过CrashGuard的16项容量。
 static const int GUARD_WH_UI_BUTTON_DRAW = GuardRegisterHook_("WarehouseUiVisual");
 static H3BaseDlg* g_wh_ui_visual_dialog_ = nullptr;
@@ -34,7 +40,6 @@ static WarehouseTabPair_ g_wh_ui_tabs_[4], g_wh_ui_arrows_[2];
 static H3LoadedPcx* g_wh_ui_button_images_[4][4] = {};
 static H3LoadedPcx* g_wh_ui_tab_images_[warehouseui::kTabCount][2] = {};
 static H3LoadedPcx* g_wh_ui_arrow_images_[2][2] = {};
-static H3LoadedPcx* g_wh_ui_title_image_ = nullptr;
 // 只保存颜色字节，不静态构造会调用游戏地址的palette对象。
 static unsigned char g_wh_ui_palette_[sizeof(H3RGB888) * 256] = {};
 static bool g_wh_ui_images_attempted_ = false, g_wh_ui_images_ready_ = false;
@@ -44,13 +49,13 @@ struct WarehouseVisualResource_ {
     H3DlgPcx* item = nullptr;
     H3LoadedPcx* original = nullptr;
 };
-static WarehouseVisualResource_ g_wh_ui_visual_resources_[16];
+static WarehouseVisualResource_ g_wh_ui_visual_resources_[20];
 static std::size_t g_wh_ui_visual_count_ = 0;
 
 // SetPcx不调整引用：保存创建时原指针，detach恢复后让原生析构释放原引用。
 static H3DlgPcx* WarehouseUiCreateVisual_(int x, int y, int w, int h, int id,
                                          H3LoadedPcx* image) noexcept {
-    if (g_wh_ui_visual_count_ >= 16) return nullptr;
+    if (g_wh_ui_visual_count_ >= 20) return nullptr;
     H3DlgPcx* item = H3DlgPcx::Create(x, y, w, h, id, "BkPack.pcx");
     if (!item) return nullptr;
     g_wh_ui_visual_resources_[g_wh_ui_visual_count_++] = { item, item->GetPcx() };
@@ -140,7 +145,9 @@ static void WarehouseUiCacheImages_(H3DlgPcx* source) noexcept {
     for (int b = 0; b < 4; ++b) for (int s = 0; s < 4; ++s) {
         _snprintf_s(file, sizeof(file), _TRUNCATE, "btn_%s%d.pcx", kinds[b], s);
         _snprintf_s(key, sizeof(key), _TRUNCATE, "whb%d%d", b, s);
-        g_wh_ui_button_images_[b][s] = WarehouseUiLoadOne_(file, 66, 32, key);
+        const int width = WarehouseUiButtonWidth_(b);
+        const int height = WarehouseUiButtonHeight_(b);
+        g_wh_ui_button_images_[b][s] = WarehouseUiLoadOne_(file, width, height, key);
         all = all && g_wh_ui_button_images_[b][s] != nullptr;
     }
     for (int t = 0; t < warehouseui::kTabCount; ++t) for (int s = 0; s < 2; ++s) {
@@ -155,9 +162,8 @@ static void WarehouseUiCacheImages_(H3DlgPcx* source) noexcept {
         g_wh_ui_arrow_images_[a][s] = WarehouseUiLoadOne_(file, 18, 22, key);
         all = all && g_wh_ui_arrow_images_[a][s] != nullptr;
     }
-    g_wh_ui_title_image_ = WarehouseUiLoadOne_("title.pcx", 72, 26, "whtitle");
-    g_wh_ui_images_ready_ = all && g_wh_ui_title_image_ != nullptr;
-    LogInfo("仓库UI: 49张四态/Tab/标题素材 ready=%d", g_wh_ui_images_ready_ ? 1 : 0);
+    g_wh_ui_images_ready_ = all;
+    LogInfo("仓库UI: 44张四态/Tab素材 ready=%d", g_wh_ui_images_ready_ ? 1 : 0);
 }
 static bool WarehouseUiImagesReady_() noexcept { return g_wh_ui_images_ready_; }
 
@@ -189,10 +195,12 @@ static WarehouseButtonPair_ WarehouseUiCreateButton_(int index, int x, int y, in
     if (index < 0 || index >= 4 || !WarehouseUiImagesReady_()) return pair;
     WarehouseButton_& b = g_wh_ui_buttons_[index];
     // 调用方在detach已恢复旧表并忘记对象；严禁复用跨modal的旧指针。
-    pair.visual = WarehouseUiCreateVisual_(x, y, 66, 32, id,
+    const int width = WarehouseUiButtonWidth_(index);
+    const int height = WarehouseUiButtonHeight_(index);
+    pair.visual = WarehouseUiCreateVisual_(x, y, width, height, id,
         g_wh_ui_button_images_[index][0]);
     if (!pair.visual) return pair;
-    pair.def = H3DlgDefButton::Create(x, y, 66, 32, id, "iOkay.def", 0, 1, FALSE, 0);
+    pair.def = H3DlgDefButton::Create(x, y, width, height, id, "iOkay.def", 0, 1, FALSE, 0);
     if (!pair.def) return pair;
     b.visual = pair.visual;
     b.def = pair.def;
@@ -216,9 +224,11 @@ static void WarehouseUiUpdateHover_(H3BaseDlg* dlg, H3Msg* msg) noexcept {
         WarehouseButton_& b = g_wh_ui_buttons_[i];
         if (!WarehouseUiVisualOwns_(dlg, b.def) || !WarehouseUiVisualOwns_(dlg, b.visual)) continue;
         const int x = b.def->GetAbsoluteX(), y = b.def->GetAbsoluteY();
-        const bool hover = b.def->IsVisible()
-            && b.def->IsEnabled() && msg->GetX() >= x && msg->GetX() < x + 66
-            && msg->GetY() >= y && msg->GetY() < y + 32;
+        const int width = WarehouseUiButtonWidth_(i);
+        const int height = WarehouseUiButtonHeight_(i);
+        const bool hover = b.def->IsVisible() && b.def->IsEnabled()
+            && msg->GetX() >= x && msg->GetX() < x + width
+            && msg->GetY() >= y && msg->GetY() < y + height;
         if (hover == b.hovered) continue;
         b.hovered = hover;
         WarehouseUiRefreshButton_(i);
@@ -265,10 +275,6 @@ static WarehouseTabPair_ WarehouseUiCreateArrow_(int arrow, int x, int y, int id
     pair.hit = H3DlgTransparentItem::Create(x, y, 18, 22, id);
     g_wh_ui_arrows_[arrow] = pair;
     return pair;
-}
-static H3DlgPcx* WarehouseUiCreateTitle_(int x, int y, int id) noexcept {
-    if (!WarehouseUiImagesReady_()) return nullptr;
-    return WarehouseUiCreateVisual_(x, y, 72, 26, id, g_wh_ui_title_image_);
 }
 static void WarehouseUiRefreshTabs_(H3BaseDlg* dlg, bool redraw) noexcept {
     const auto window = warehouseui::MakeTabWindow(g_wh_ui_tab_offset_, warehouseui::kTabCount, 4);

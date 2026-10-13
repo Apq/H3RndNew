@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""仓库UI（H3RndNew 第五轮）按钮/Tab/标题素材生成器。
+"""仓库UI（H3RndNew 第六轮）素材生成器。
 
-参考 H3MegaDesc 确认按钮做法：原生金框(bv_frmL) + 原生底纹(bv_ok*) + 四态亮暗比例。
-本脚本用同一批原生素材程序化合成以下 PCX（24bit RGB，运行时量化到游戏调色板）：
+按钮底图严格沿用 H3MegaDesc 的 bv_ok0..3.pcx + bv_frmL.pcx 母版：
+先清除参考图中央勾号，再用九宫格保留金框和原始四态底纹，最后叠加本项目文字。
+标题不再烘焙PCX，生产代码直接使用原生背包的 H3DlgText 参数。
 
-  whui/btn_open{0..3}.pcx    66x32  "仓库"     0普通 1按下 2高亮 3禁用
-  whui/btn_close{0..3}.pcx   66x32  "关闭"
+  whui/btn_open{0..3}.pcx    66x32  "仓库"
+  whui/btn_close{0..3}.pcx   24x24  顶部小X
   whui/btn_take{0..3}.pcx    66x32  "一键取出"
   whui/btn_put{0..3}.pcx     66x32  "一键放入"
-  whui/tab{00..13}{n,s}.pcx  44x22  14 个分类页签（n=普通 s=选中）
-  whui/arrow_{prev,next}{0,1}.pcx 18x22 滚动箭头（0=可用 1=禁用）
-  whui/title.pcx             72x26  "仓库"标题（洋红 255,0,255 为透明键）
+  whui/tab{00..11}{n,s}.pcx  44x22  12 个分类页签
+  whui/arrow_{prev,next}{0,1}.pcx 18x22 滚动箭头
 
 用法：
     pythonw scripts/make_whui_assets.py        # 在 H3RndNew 目录下执行
@@ -28,17 +28,16 @@ ROOT = os.path.dirname(HERE)
 SRC = os.path.join(ROOT, "whui_src")
 OUT = os.path.join(ROOT, "whui")
 
-TITLE_KEY = (255, 0, 255)          # 透明键（运行时映射为调色板索引 0）
+BTN_FRAME_KEY = (0, 255, 255)      # bv_frmL.pcx 透明青色
+BTN_W, BTN_H = 66, 32
+CLOSE_W, CLOSE_H = 24, 24
+TAB_W, TAB_H = 44, 22
+ARROW_W, ARROW_H = 18, 22
 INK_NORMAL = (255, 231, 160)
 INK_HIGHLIGHT = (255, 248, 214)
 INK_PRESSED = (222, 190, 122)
 INK_DISABLED = (152, 140, 122)
 INK_SHADOW = (28, 18, 8)
-
-BTN_W, BTN_H = 66, 32
-TAB_W, TAB_H = 44, 22
-ARROW_W, ARROW_H = 18, 22
-TITLE_W, TITLE_H = 72, 26
 
 FONT_CANDIDATES = [
     r"C:\Windows\Fonts\simhei.ttf",
@@ -49,7 +48,7 @@ FONT_CANDIDATES = [
 
 TABS = [
     "常规", "卷轴", "装备", "头部", "肩部", "项链", "武器",
-    "盾牌", "胸甲", "戒指", "靴子", "杂物", "机械", "魔法书",
+    "盾牌", "胸甲", "戒指", "靴子", "杂物",
 ]
 
 
@@ -82,11 +81,11 @@ def ratio(a, b):
 
 def measure_states():
     """四态亮度比例：取各 bv_ok 左上 8x8（无对勾区域）实测均值相对普通态。"""
-    base = mean_of(load_rgb("bv_ok0.bmp"), (0, 0, 8, 8))
-    high = mean_of(load_rgb("bv_ok2.bmp"), (0, 0, 8, 8))
-    press = mean_of(load_rgb("bv_ok1.bmp"), (0, 0, 8, 8))
-    disabled_full0 = mean_of(load_rgb("bv_ok0.bmp"), (0, 0, 48, 40))
-    disabled_full3 = mean_of(load_rgb("bv_ok3.bmp"), (0, 0, 48, 40))
+    base = mean_of(load_rgb("bv_ok0.pcx"), (3, 3, 11, 11))
+    high = mean_of(load_rgb("bv_ok2.pcx"), (3, 3, 11, 11))
+    press = mean_of(load_rgb("bv_ok1.pcx"), (3, 3, 11, 11))
+    disabled_full0 = mean_of(load_rgb("bv_ok0.pcx"), (0, 0, 48, 40))
+    disabled_full3 = mean_of(load_rgb("bv_ok3.pcx"), (0, 0, 48, 40))
     return {
         "base": base,
         "highlight": ratio(high, base),
@@ -96,8 +95,8 @@ def measure_states():
 
 
 def texture_patch(w, h):
-    """确认按钮内部 2px 边距后的真实底纹（避开1px金框），镜像平铺。"""
-    return load_rgb("bv_ok0.bmp").crop((2, 2, 8, 8))
+    """页签/箭头沿用按钮母版左侧无勾号纹理。"""
+    return load_rgb("bv_ok0.pcx").crop((3, 3, 10, 10))
 
 
 def mirror_tile(patch, w, h):
@@ -173,25 +172,90 @@ def gold_border(im):
 STATE_ORDER = ("normal", "pressed", "highlight", "disabled")
 
 
+def clean_ok_base(state_index):
+    """清除四态参考图的勾号及其阴影，只重建中央底纹。"""
+    src = load_rgb("bv_ok%d.pcx" % state_index)
+    if src.size != (48, 40):
+        raise ValueError("bv_ok%d must be 48x40, got %s" % (state_index, src.size))
+    out = src.copy()
+    # 勾号实际覆盖 x=9..39、y=6..35（含亮边、深色投影）；
+    # 取样带避开两侧暗影：左带 x=3..7，右带 x=41..44。
+    x0, x1, y0, y1 = 8, 40, 6, 36
+    left = src.crop((3, 6, 8, 36))
+    right = src.crop((40, 6, 45, 36))
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            tile = (x - x0) // left.width
+            offset = (x - x0) % left.width
+            donor = left if tile % 2 == 0 else right
+            if tile % 4 in (1, 2):
+                offset = donor.width - 1 - offset
+            out.putpixel((x, y), donor.getpixel((offset, y - y0)))
+    return out
+
+
+def nine_slice(src, width, height, margin=5):
+    """九宫格缩放：边角来自MegaDesc母版，中区仅延展同态底纹。"""
+    sw, sh = src.size
+    out = Image.new("RGB", (width, height))
+    # corners
+    out.paste(src.crop((0, 0, margin, margin)), (0, 0))
+    out.paste(src.crop((sw - margin, 0, sw, margin)), (width - margin, 0))
+    out.paste(src.crop((0, sh - margin, margin, sh)), (0, height - margin))
+    out.paste(src.crop((sw - margin, sh - margin, sw, sh)),
+              (width - margin, height - margin))
+    # edges and center
+    out.paste(src.crop((margin, 0, sw - margin, margin)).resize(
+        (width - 2 * margin, margin), Image.NEAREST), (margin, 0))
+    out.paste(src.crop((margin, sh - margin, sw - margin, sh)).resize(
+        (width - 2 * margin, margin), Image.NEAREST), (margin, height - margin))
+    out.paste(src.crop((0, margin, margin, sh - margin)).resize(
+        (margin, height - 2 * margin), Image.NEAREST), (0, margin))
+    out.paste(src.crop((sw - margin, margin, sw, sh - margin)).resize(
+        (margin, height - 2 * margin), Image.NEAREST), (width - margin, margin))
+    center = src.crop((margin, margin, sw - margin, sh - margin)).resize(
+        (width - 2 * margin, height - 2 * margin), Image.NEAREST)
+    out.paste(center, (margin, margin))
+    return out
+
+
+def apply_reference_frame(canvas):
+    """套用原始 1px 金框，不缩放窄化原图边缘。"""
+    frame = load_rgb("bv_frmL.pcx")
+    if frame.size != (50, 42):
+        raise ValueError("bv_frmL must be 50x42, got %s" % (frame.size,))
+    width, height = canvas.size
+    frame_px = frame.load()
+    out_px = canvas.load()
+    for x in range(width):
+        source_x = x * (frame.width - 1) // max(width - 1, 1)
+        out_px[x, 0] = frame_px[source_x, 0]
+        out_px[x, height - 1] = frame_px[source_x, frame.height - 1]
+    for y in range(1, height - 1):
+        source_y = y * (frame.height - 1) // max(height - 1, 1)
+        out_px[0, y] = frame_px[0, source_y]
+        out_px[width - 1, y] = frame_px[frame.width - 1, source_y]
+    return canvas
+
+
 def make_button(text, state, ratios):
-    w, h = BTN_W, BTN_H
-    fill = mirror_tile(texture_patch(w - 2, h - 2), w - 2, h - 2)
-    if state == "highlight":
-        fill = scale_color(fill, ratios["highlight"])
-        ink = INK_HIGHLIGHT
-    elif state == "pressed":
-        fill = scale_color(fill, ratios["pressed"])
-        ink = INK_PRESSED
-    elif state == "disabled":
-        fill = scale_color(fill, ratios["disabled"], desaturate=0.55)
-        ink = INK_DISABLED
-    else:
-        ink = INK_NORMAL
-    canvas = Image.new("RGB", (w, h))
-    canvas.paste(fill, (1, 1))
+    state_index = STATE_ORDER.index(state)
+    canvas = apply_reference_frame(nine_slice(clean_ok_base(state_index), BTN_W, BTN_H))
+    ink = {"normal": INK_NORMAL, "highlight": INK_HIGHLIGHT,
+           "pressed": INK_PRESSED, "disabled": INK_DISABLED}[state]
     size = 16 if len(text) <= 2 else 15
-    stamp_text(canvas, text, size, ink, w - 12, dy=1 if state == "pressed" else 0)
-    gold_border(canvas)
+    stamp_text(canvas, text, size, ink, BTN_W - 12,
+               dy=1 if state == "pressed" else 0)
+    return canvas
+
+
+def make_close(state):
+    state_index = STATE_ORDER.index(state)
+    canvas = apply_reference_frame(nine_slice(clean_ok_base(state_index), CLOSE_W, CLOSE_H, 4))
+    stamp_text(canvas, "X",
+               14, {"normal": INK_NORMAL, "highlight": INK_HIGHLIGHT,
+                    "pressed": INK_PRESSED, "disabled": INK_DISABLED}[state],
+               CLOSE_W - 4, dy=1 if state == "pressed" else 0)
     return canvas
 
 
@@ -232,20 +296,6 @@ def make_arrow(glyph, enabled):
     return canvas
 
 
-def make_title():
-    canvas = Image.new("RGB", (TITLE_W, TITLE_H), TITLE_KEY)
-    mask = text_mask("仓库", 19, TITLE_W - 8)
-    # Keep anti-aliased text edges opaque; magenta is the transparency key.
-    binary = mask.point(lambda value: 255 if value >= 128 else 0)
-    x = (TITLE_W - binary.size[0]) // 2
-    y = (TITLE_H - binary.size[1]) // 2
-    shadow = Image.new("RGB", binary.size, (24, 14, 4))
-    canvas.paste(shadow, (x, y + 1), binary)
-    ink = Image.new("RGB", binary.size, (255, 233, 165))
-    canvas.paste(ink, (x, y), binary)
-    return canvas
-
-
 def save_pcx(im, name):
     path = os.path.join(OUT, name)
     im.save(path)
@@ -264,13 +314,16 @@ def main():
                   for k in ("highlight", "pressed", "disabled")))
 
     preview_cells = []
-    buttons = [("open", "仓库"), ("close", "关闭"),
-               ("take", "一键取出"), ("put", "一键放入")]
+    buttons = [("open", "仓库"), ("take", "一键取出"), ("put", "一键放入")]
     for key, text in buttons:
         for index, state in enumerate(STATE_ORDER):
             im = make_button(text, state, ratios)
             save_pcx(im, "btn_%s%d.pcx" % (key, index))
             preview_cells.append(im)
+    for index, state in enumerate(STATE_ORDER):
+        im = make_close(state)
+        save_pcx(im, "btn_close%d.pcx" % index)
+        preview_cells.append(im)
 
     for index, title in enumerate(TABS):
         for suffix, selected in (("n", False), ("s", True)):
@@ -284,26 +337,23 @@ def main():
             save_pcx(im, "arrow_%s%d.pcx" % (key, disabled))
             preview_cells.append(im)
 
-    title = make_title()
-    save_pcx(title, "title.pcx")
-
-    # 3 倍放大拼版，便于人工核对纹理与文字。
+    # 所有按钮统一每行4列（normal/pressed/highlight/disabled）。
     scale = 3
-    cell_w = (max(im.size[0] for im in preview_cells) + 8) * scale
-    cell_h = (max(im.size[1] for im in preview_cells) + 8) * scale
-    cols = 6
-    rows = (len(preview_cells) + cols - 1) // cols
-    sheet = Image.new("RGB", (cols * cell_w, (rows + 1) * cell_h), (48, 48, 66))
+    cell_w = (BTN_W + 8) * scale
+    cell_h = (BTN_H + 8) * scale
+    sheet = Image.new("RGB", (cell_w * 4, cell_h * 11), (48, 48, 66))
+    button_count = len(buttons) * len(STATE_ORDER) + len(STATE_ORDER)
     for i, im in enumerate(preview_cells):
         big = im.resize((im.size[0] * scale, im.size[1] * scale), Image.NEAREST)
-        sheet.paste(big, ((i % cols) * cell_w + 4, (i // cols) * cell_h + 4))
-    sheet.paste(title.resize((title.size[0] * scale, title.size[1] * scale),
-                             Image.NEAREST),
-                (4, rows * cell_h + 4))
+        if i < button_count:
+            col, row = i % 4, i // 4
+        else:
+            col, row = (i - button_count) % 4, 4 + (i - button_count) // 4
+        sheet.paste(big, (col * cell_w + 4, row * cell_h + 4))
     preview = os.path.join(OUT, "preview.png")
     sheet.save(preview)
     print("preview -> %s (%sx%s)" % (preview, sheet.size[0], sheet.size[1]))
-    print("total pcx = %d" % (len(preview_cells) + 1))
+    print("total pcx = %d" % len(preview_cells))
     return 0
 
 

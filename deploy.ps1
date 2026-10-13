@@ -13,21 +13,47 @@ $packsDst = "$gameDir\_HD3_Data\Packs\热血插件"
 $src = "$PSScriptRoot\Release"
 
 try {
-    if (-not (Test-Path $packsDst)) {
-        New-Item -ItemType Directory -Path $packsDst -Force | Out-Null
-    }
+    # 在创建目标目录、复制DLL或任何素材之前，校验全部源文件和精确44项清单。
     $dll = Join-Path $src 'H3RndNew.dll'
-    if (-not (Test-Path $dll)) {
-        throw "未找到编译输出：$dll"
+    $sourceFiles = @($dll, "$PSScriptRoot\H3RndNew.default.ini", "$PSScriptRoot\使用说明.txt")
+    foreach ($sourceFile in $sourceFiles) {
+        if (-not (Test-Path -LiteralPath $sourceFile -PathType Leaf)) {
+            throw "部署文件缺失：$sourceFile"
+        }
     }
-    Copy-Item $dll $packsDst -Force
-    Copy-Item "$PSScriptRoot\H3RndNew.default.ini" $packsDst -Force
-    Copy-Item "$PSScriptRoot\使用说明.txt" $packsDst -Force
     $uiAssets = Join-Path $PSScriptRoot 'whui'
+    $expectedAssets = @(
+        foreach ($button in @('open', 'close', 'take', 'put')) {
+            foreach ($state in 0..3) { "btn_$button$state.pcx" }
+        }
+        foreach ($tab in 0..11) {
+            foreach ($state in @('n', 's')) { 'tab{0:00}{1}.pcx' -f $tab, $state }
+        }
+        'arrow_prev0.pcx'; 'arrow_prev1.pcx'; 'arrow_next0.pcx'; 'arrow_next1.pcx'
+    )
     $assets = @(Get-ChildItem -LiteralPath $uiAssets -Filter '*.pcx' -File)
-    if ($assets.Count -ne 49) { throw "仓库UI素材不完整：期望49个PCX，实际$($assets.Count)" }
+    $assetNames = @($assets | ForEach-Object { $_.Name })
+    if ($assets.Count -ne 44 -or @(Compare-Object $expectedAssets $assetNames).Count -ne 0) {
+        throw "仓库UI素材清单不匹配：期望44个指定PCX，实际$($assets.Count)"
+    }
+
+    New-Item -ItemType Directory -Path $packsDst -Force | Out-Null
+    foreach ($sourceFile in $sourceFiles) { Copy-Item -LiteralPath $sourceFile -Destination $packsDst -Force }
     $uiDst = Join-Path $packsDst 'whui'
     New-Item -ItemType Directory -Path $uiDst -Force | Out-Null
+    foreach ($staleName in @('title.pcx', 'tab12n.pcx', 'tab12s.pcx', 'tab13n.pcx', 'tab13s.pcx')) {
+        $staleAsset = Join-Path $uiDst $staleName
+        if (Test-Path -LiteralPath $staleAsset) {
+            $resolvedAsset = (Resolve-Path -LiteralPath $staleAsset).Path
+            $resolvedUiDst = (Resolve-Path -LiteralPath $uiDst).Path
+            if ([System.IO.Path]::GetDirectoryName($resolvedAsset) -ne $resolvedUiDst -or
+                [System.IO.Path]::GetFileName($resolvedAsset) -ne $staleName -or
+                (Get-Item -LiteralPath $resolvedAsset).PSIsContainer) {
+                throw "拒绝删除非目标旧素材：$resolvedAsset"
+            }
+            Remove-Item -LiteralPath $resolvedAsset -Force
+        }
+    }
     $assets | Copy-Item -Destination $uiDst -Force
 
     Write-Host "已部署到 $packsDst"

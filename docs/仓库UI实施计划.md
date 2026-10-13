@@ -219,22 +219,45 @@
 - 标题固定为 **仓库**，不拼英雄名。显示的是当前英雄 `hero.id` 对应的独立库存，不共享其他英雄道具。
 - 仓库、关闭、一键取出、一键放入：各 66×32，采用 H3MegaDesc 的 DEF命中/按压 + PCX视觉模式，复制15个vtable槽，仅替换Draw槽4；普通/按下/悬停高亮/禁用各一张背景及自生成中文文字。按下取原生 `+0x16 & 1`，禁用取 `&0x20`，悬停由 command4绝对坐标维护自有bool，不占用原生SELECTED位。
 - 一键取出在面板 `(8,50)`，一键放入在 `(331,50)`；二者均按**当前活动分类**操作。取出按库存顺序移动到背包空位，最多填到64格，剩余保留；放入只移动背包中匹配项（不含已穿戴装备），保持剩余背包和转移项顺序。无匹配、满包取出、locked/held时显示禁用态。
-- 分类顺序：常规、卷轴、装备、头部、肩部、项链、武器、盾牌、胸甲、戒指、靴子、杂物、机械、魔法书。一次显示4个44×22标题，左右18×22箭头滚动标题窗口；箭头边界钳制。切换分类回到第一页并清除待放入选择。
+- 分类顺序（round-6）：常规、卷轴、装备、头部、肩部、项链、武器、盾牌、胸甲、戒指、靴子、杂物，共12项。机械与魔法书不进入背包，因此不列页签；一次显示4个44×22标题，左右18×22箭头滚动标题窗口；箭头边界钳制。切换分类回到第一页并清除待放入选择。
 - 本轮实现约定：**常规=全部道具的总入口**，其他分类是子集；这不是对“常规”语义的额外用户裁定，若需要排除装备可再调整。卷轴优先按artifactId=1识别，装备包含非负穿戴位置且排除卷轴。左右戒指合并，5个杂物槽合并，机械合并；id=0魔法书也查询GetSlot。
 - 可见列表保存真实库存索引，单件取回与分页使用筛选索引映射，避免筛选后取错物品。增加64个空格透明命中区域，便于空仓库放入。全部owned面板控件统一展开/隐藏，不新增modal或OS置顶。
 - `DepositAll/RetrieveAll` 共用Flow的hero/owner/token/epoch/完整原生快照/locked/held校验；分配和候选整理在提交前，失败无变更，成功只推进一次epoch。完整8字节宝物pair（含卷轴subtype）不拆开。
-- 成功转移仍置 `dlg+0x7C=-2` 并走原生重建重开，刷新背包icon/hit/tooltip；重建保留活动分类与标题滚动偏移，仓库层仍按默认收起。不是在活窗口中只改hero数据冒充刷新。
-- 49张素材由 `scripts/make_whui_assets.py` 从 `whui_src` 的MegaDesc风格参考及Windows中文字体生成；16按钮、28页签、4箭头、1标题，预览 `whui/preview.png`。部署和打包清单增加49个PCX，不把源图/脚本/预览装入游戏。
-- 运行时用生产共用 `WarehouseUiPcx.hpp::DecodePcxRgb` 解码24bit三平面RLE，逐plane处理padding，拒绝坏头/越界/截断且失败不改输出；量化调色板取BkPack.pcx，透明洋红映射索引0。路径只用4MB堆缓冲。49张全部成功才启用新视觉，失败回退中文原生按钮/标题。
+- `DepositAll/RetrieveAll` 共用Flow的hero/owner/token/epoch/完整原生快照/locked/held校验；分配和候选整理在提交前，失败无变更，成功只推进一次epoch。完整8字节宝物pair（含卷轴subtype）不拆开。
+- **Round-6 废止“成功后自动关闭重建”**（用户裁定：仓库打开时无论怎样移动道具都不应关闭仓库）。转移成功后改为就地刷新：`WarehouseUiRefreshAfterMove_` 重算筛选/翻页/图标/计数并按需局部重绘，`dlg+0x7C` 与 `CloseDialog` 都不再参与成功路径；只有关闭X（ID 30060）与 Esc 收起仓库层。旧的“先中和消息、原生返回后写 `-2` 并返回 2”顺序（`CallNativeThenFinalize`）已从生产代码删除。
+- 44张素材由 `scripts/make_whui_assets.py` 从 `whui_src` 的 H3MegaDesc 原始四态参考（`bv_ok0..3.pcx`）生成；16按钮（4族×4态）、24页签（12×2态）、4箭头，共44个PCX，预览 `whui/preview.png`。按钮只保留参考图的立体斜面/边框纹理，检查勾被抹除后写中文文字。标题不再使用素材，改为原生 `H3DlgText`。
+- 运行时用生产共用 `WarehouseUiPcx.hpp::DecodePcxRgb` 解码24bit三平面RLE，逐plane处理padding，拒绝坏头/越界/截断且失败不改输出；量化调色板取BkPack.pcx，透明洋红映射索引0。路径只用4MB堆缓冲。44张全部成功才启用新视觉，失败回退中文原生按钮/标题。
 - **资源生命周期**：绘制前检查当前dialog owned-list；detach先恢复owned DEF原vtable及自有PCX创建时原资源指针，再清空对象引用，原生析构负责原资源引用；cached图片不被modal析构反复减引用。静态缓存只存颜色原始字节，避免静态构造游戏palette对象。visual guard与既有15项合计16项，不超CrashGuard注册容量。
 - 第四轮原生右键、网络、超时、0x200/A、未知命令透传及展开/收起Esc分流保持。自有按钮/页签按下只中和原生callback未知ID关闭路径，动作在释放CLICK执行一次。
 
-- 成功转移后必须让**原生 callback 只收到被中和过的消息**（不会进未知ID关闭分支把 `dlg+0x7C` 覆盖成 -1），并在原生返回后重新写 `-2`、`CloseDialog`、返回 `2`。反过来在中和前调 CloseDialog 会被统一中和消除，`-2` 重开不会执行。证据：`CloseDialog` 跳 `0x00491640` 写 `0x200/0xA`，modal loop 只在返回 2 且消息为 `0x200/0xA` 时退出。
+- 【第五轮结论，round-6 已废止】第五轮曾在成功转移后于原生返回之后写 `-2` 并 `CloseDialog`+返回 `2`（证据：`CloseDialog` 跳 `0x00491640` 写 `0x200/0xA`，modal loop 只在返回 2 且消息为 `0x200/0xA` 时退出）。round-6 用户裁定“仓库打开后移动道具不得关闭仓库”，该路径连同 `CallNativeThenFinalize` 一并删除；现在只中和被消费消息，不让原生 callback 进入未知ID关闭分支。
 - 布局只规划不平移：`layout.backpack` 必须与原生锚点实际原点一致，否则拒绝 attach 保留原生背包，避免两套命中控件重叠。
 - 两只 modal LoHook 安装失败必须回滚并禁止 attach；仅装一半会留下永不 detach 的 vtable/PCX 裸指针残留。
 
-### 第五轮验证边界（更新）
+### 第五轮验证记录（历史，round-6 已取代）
 
 2026-10-13 18:08：`build.bat` + `H3RND_RUN_AUDIT_TESTS=1` + 游戏真实 `patcher_x86.dll`；主 DLL 与测试工程均 0 warning/0 error，全回归 PASS：codec 3025、core 1017、store 28、native 30、**UI flow 170**（新增回调关闭顺序 6 项与布局 fail-closed 3 项）、PCX 286、UI 状态机/11 指纹 77、LoHook ABI、真实 patcher callback/RNG 并发。回调顺序由生产共用 `modules/WarehouseUiCallback.hpp::CallNativeThenFinalize` 保证并离线回归。部署（游戏未运行，仅 HD_Launcher）Release 与 Packs DLL SHA256 均为 `C8BFD5AF792DBB2735AAECA1570B816FC8D3561C0697491EF41EDAAD4B3F5DF9`，49 张 whui PCX 随包部署，DLL 版本为用户本地 `0.6.2026.1012`。第四轮的中和语义、Esc/右键/网络/超时透传不变。
 
 未运行游戏：四态按钮实际观感、分类切换与批量后的 `-2` 重开、标题透明与 save-under、存档读档回环、以及本次关闭顺序修复的实机效果均由用户验收。`H3RndNew.rc` 为用户本地版本升级修改（0.5→0.6.2026.1012），保持不提交。
+
+## 2026-10-13 第六轮：原生质感素材、12页签、就地刷新与“移动不关闭”
+
+用户四项裁定驱动本轮：
+
+1. **按钮素材沿用 H3MegaDesc 原始四态质感**：`scripts/make_whui_assets.py` 直接以 `whui_src/bv_ok0..3.pcx` 为参考，抹掉勾选图形、保留其立体斜面/边框纹理，再写中文文字。素材总数由 49 收敛为 **44**（16按钮 + 24页签 + 4箭头），标题不再用素材。独立回归 `scripts/test_whui_assets.py` 七项全过：精确44文件清单、RGB/尺寸、独立PCX RLE解码对拍、四态字节互异、preview逐像素对应、生成器分类、以及 PowerShell BOM/CRLF 与 C++ 消费数量。
+2. **页签由14项减为12项**：机械与魔法书不会进入背包，也就不会进入仓库，故不再列出（`kTabCount=12`）。槽位映射严格按 H3 原生 `NSlots::eArtifactSlots`：MISC1..MISC4 = 9..12、MISC5 = 18 归杂物；BALLISTA/AMMO_CART/FIRST_AID_TENT/CATAPULT = 13..16 与 SPELLBOOK = 17 被 `IsBackpackSlot` 拒绝，任何页签都不匹配。
+3. **两个一键按钮左右交换**：左上 `(8,50)` 为“一键放入”（ID 30202），右上为“一键取出”（ID 30201），语义与素材族一一对应。
+4. **移动道具绝不关闭仓库**（用户原话：仓库打开时不管如何移动道具，都不应该关闭仓库，只有手动点关闭按钮或ESC键才关闭仓库页面）。成功转移只调 `WarehouseUiRefreshAfterMove_` 就地刷新；`dlg+0x7C=-2`、`CloseDialog`、返回 2 的旧链路和 `CallNativeThenFinalize` 一并删除，原生 callback 仍在 `__try` 外恰好执行一次。
+
+本轮运行时接线要点：
+
+- **图标层重做**：每格创建两个同 ID（`2000+i`）的覆盖 DEF——`artifact.def` 与 HD `def.SpScrArt`，按当前记录只激活其一（`MakeIconView` 纯函数选择资源族，卷轴走 `def.SpScrArt` 帧=subtype，受 HD 全局 `HD_SOD+0x157FB8` 判别，已在 `.data` 段映射内核实）。原生原件自接管起永久 `HideDeactivate`：`SetFrame` 不能换 DEF 资源，且收起后重新启用原件会显示构造时的旧帧。
+- **关闭控件**：右上角零内缩贴角的 24×24 小四态 X（ID 30060）。“仓库”按钮（ID 30200）改为幂等展开，不再切换收起；收起只有 X 与 Esc 两条路径。
+- **点击边沿策略**：仓库控件只中和 `LBUTTON_DOWN(0xC)`，动作只在 `LBUTTON_CLICK(0xD)` 执行一次；`IsWarehouseControlId` 覆盖翻页箭头 `30050/30051`、`30060..30202`、页签 `30300..30311`，不含背景 `30000..30004`。展开态下宝物图标 `2000..2063` 的 DOWN 与 CLICK 都由本模块接管，否则会落进原生 `0x039987` 未知回退关闭分支。
+- **标题**：原生 `H3DlgText` 参数复用（`405×30`、bigfont、`eTextColor::REGULAR`、居中），与原生背包标题同字号同亮度。
+
+### 第六轮验证边界
+
+2026-10-13 23:20（冻结源码后的最终全量）：`build.bat` + `H3RND_RUN_AUDIT_TESTS=1` + 游戏真实 `patcher_x86.dll`；主 DLL 与测试工程均 0 警告 0 错误，15 项审计全部 PASS（codec 3025、core 1017、store 28、native 30、**UI flow 171**、PCX 44 素材/266、UI 状态机/11 指纹 77、LoHook ABI、真实 patcher callback/RNG 并发）。`deploy.bat` 退出码 0，Release 与 Packs DLL SHA256 均为 `4E53C0F99464B29DC418123192EC776E330F2D534C1FCDB62F5AF78A310C96BA`（159744 字节），部署目录 whui PCX 恰好 44 张且 `title.pcx/tab12n/tab12s/tab13n/tab13s` 已清除，DLL 版本为用户本地 `0.6.2026.1012`。素材独立回归 `scripts/test_whui_assets.py` 七项全过。前两次构建失败均为构建窗口内源码被并发修改产生的混合快照（4/170 与 1/171 假失败），冻结源码后一次通过——教训已沉淀进技能。
+
+未运行游戏：四态按钮与 H3MegaDesc 原图的实际观感、中文标题亮度、极端右上小 X 的命中范围、12 页签滚动与两个一键按钮的左右语义、就地刷新后 tooltip/状态栏一致性、以及“移动道具后仓库保持打开”均由用户实机验收。`H3RndNew.rc` 为用户本地版本修改（0.6.2026.1012），保持不提交。

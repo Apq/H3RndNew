@@ -31,7 +31,7 @@ static constexpr const char* kWhUiTitleFont_ = "bigfont.fnt";
 
 using WarehouseCallback_ = int (__stdcall *)(void*, H3Msg*);
 
-static constexpr std::size_t kWhUiPanelItemCapacity_ = 192;
+static constexpr std::size_t kWhUiPanelItemCapacity_ = 320;
 
 struct WarehouseUiLive_ {
     void* dialog = nullptr;
@@ -59,9 +59,11 @@ struct WarehouseUiLive_ {
     H3DlgItem* panelItems[kWhUiPanelItemCapacity_] = {};
     std::size_t panelItemCount = 0;
     std::vector<std::size_t> filtered;
-    // 成功转移后需要“关闭并按 -2 重建”。关闭消息必须在原生 callback 跑完
-    // 之后再发，否则会被统一中和掉 command/subtype，modal 不会退出（见下）。
-    bool closePending = false;
+    // 普通/卷轴控件各自拥有资源；原生旧图标保留但停用，不交换资源指针。
+    H3DlgDef* nativeIcons[kWhUiSlotCount_][2] = {};
+    H3DlgItem* originalNativeIcons[kWhUiSlotCount_] = {};
+    bool nativeIconsReady = false;
+    bool scrollDefEnabled = false;
 };
 
 static WarehouseUiLive_ g_wh_ui_live_;
@@ -77,6 +79,7 @@ static WarehouseSkinFactory_ g_wh_ui_skin_factory_ = nullptr;
 
 static constexpr int kWhUiOpenId_ = 30200;
 static constexpr int kWhUiCloseId_ = 30060;
+static const int* g_wh_ui_scroll_enabled_ = nullptr;
 static constexpr int kWhUiOpenX_ = 8;
 static constexpr int kWhUiOpenY_ = 18;
 static constexpr int kWhUiPanelSaveExtra_ = 8;
@@ -106,7 +109,12 @@ static constexpr int kWhUiTakeAllId_ = 30201;
 static constexpr int kWhUiPutAllId_ = 30202;
 static constexpr int kWhUiButtonWidth_ = 66;
 static constexpr int kWhUiButtonHeight_ = 32;
+static constexpr int kWhUiCloseButtonWidth_ = 24;
+static constexpr int kWhUiCloseButtonHeight_ = 24;
 static void WarehouseUiSetExpanded_(H3BaseDlg* dlg, bool expanded, bool redraw) noexcept;
+static void WarehouseUiDetach_(H3BaseDlg* dlg) noexcept;
+static void WarehouseUiRefreshNativeIcons_(H3BaseDlg* dlg) noexcept;
+static void WarehouseUiSetNativeIconLayer_(H3BaseDlg* dlg, bool warehouseLayer) noexcept;
 static int __stdcall WarehouseUiCallback_(void* self, H3Msg* msg);
 static void WarehouseUiCopyNative_(H3Hero* hero,
     warehouse::NativeBackpack& native) noexcept;
@@ -231,12 +239,12 @@ static void WarehouseUiRefresh_(H3BaseDlg* dlg, bool redraw) noexcept
         || g_wh_ui_live_.hero->backpackCount >= 64 || WarehouseUiHeld_() || g_wh_locked_ != 0;
     const bool putDisabled = !WarehouseUiBackpackHasMatch_()
         || WarehouseUiHeld_() || g_wh_locked_ != 0;
-    if (WarehouseUiOwns_(dlg, g_wh_ui_live_.takeAllButton))
-        g_wh_ui_live_.takeAllButton->EnableItem(!takeDisabled);
     if (WarehouseUiOwns_(dlg, g_wh_ui_live_.putAllButton))
         g_wh_ui_live_.putAllButton->EnableItem(!putDisabled);
-    WarehouseUiSetButtonDisabled_(2, takeDisabled);
+    if (WarehouseUiOwns_(dlg, g_wh_ui_live_.takeAllButton))
+        g_wh_ui_live_.takeAllButton->EnableItem(!takeDisabled);
     WarehouseUiSetButtonDisabled_(3, putDisabled);
+    WarehouseUiSetButtonDisabled_(2, takeDisabled);
     WarehouseUiRefreshTabs_(dlg, false);
     // Attach 阶段不重绘，也不让页签刷新重新显示已隐藏的面板控件。
     if (!g_wh_ui_live_.expanded) {
@@ -246,16 +254,95 @@ static void WarehouseUiRefresh_(H3BaseDlg* dlg, bool redraw) noexcept
     if (redraw) dlg->Redraw();
 }
 
-static bool WarehouseUiCloseAndRefresh_(H3BaseDlg* dlg, H3Msg* msg) noexcept
+static void WarehouseUiPrepareNativeIcons_(H3BaseDlg* dlg) noexcept
 {
-    if (!dlg || !msg) return false;
-    // 原生 caller 把 dlg+0x7C = -2 当作“重建整个完整背包”。成功转移后必须
-    // 走这条重建路径，让游戏自己重算图标/命中/状态栏（当前 dialog 仍存活）。
-    // 关闭动作延后到原生 callback 执行之后：被消费的消息会被中和成
-    // MOUSE_OVER，若在此处先 CloseDialog，随后 write 的 0x200/0xA 会被抹掉，
-    // modal 循环（要求返回 2 且消息为 0x200/0xA）就不会退出。见 wrapper 注释。
-    g_wh_ui_live_.closePending = true;
-    return true;
+    if (!dlg || !g_wh_ui_live_.hero) return;
+    g_wh_ui_live_.nativeIconsReady = false;
+    g_wh_ui_live_.scrollDefEnabled = g_wh_ui_scroll_enabled_
+        && *g_wh_ui_scroll_enabled_ != 0;
+    for (H3DlgItem* item : dlg->GetList()) {
+        if (!item || item->GetID() < 2000 || item->GetID() >= 2064) continue;
+        const int slot = item->GetID() - 2000;
+        if (g_wh_ui_live_.originalNativeIcons[slot]) continue; // 重复ID只保留首个
+        if (item->Cast<H3DlgDef>() == nullptr) {
+            // 原生此ID必须是DEF；否则不接管，继续走原生路径，防止误用。
+            g_wh_ui_live_.nativeIconsReady = false;
+            return;
+        }
+        g_wh_ui_live_.originalNativeIcons[slot] = item;
+    }
+    for (int i = 0; i < kWhUiSlotCount_; ++i) {
+        const int col = i % static_cast<int>(warehouseui::kGridColumns);
+        const int row = i / static_cast<int>(warehouseui::kGridColumns);
+        const int x = g_wh_ui_live_.layout.backpack.x + warehouseui::kGridOriginDX
+            + col * warehouseui::kGridPitch + warehouseui::kGridDefDX;
+        const int y = g_wh_ui_live_.layout.backpack.y + warehouseui::kGridOriginDY
+            + row * warehouseui::kGridPitch + warehouseui::kGridDefDY;
+        for (int kind = 0; kind < 2; ++kind) {
+            H3DlgDef* icon = H3DlgDef::Create(x, y, warehouseui::kGridDefSize,
+                warehouseui::kGridDefSize, 2000 + i,
+                kind == 1 ? NH3Dlg::HDassets::SCROLL_SMALL : NH3Dlg::Assets::ARTIFACT_DEF,
+                0, 0, FALSE, FALSE);
+            if (!icon) {
+                // 半途失败必须清掉本轮已经加入的对象，防止只在own-list中的
+                // 悬垂指针继续参与item遍历/hit/析构。
+                for (int created = 0; created < kWhUiSlotCount_; ++created)
+                    for (int k = 0; k < 2; ++k) {
+                        H3DlgDef* item = g_wh_ui_live_.nativeIcons[created][k];
+                        g_wh_ui_live_.nativeIcons[created][k] = nullptr;
+                        if (WarehouseUiOwns_(dlg, item)) item->HideDeactivate();
+                    }
+                for (H3DlgItem* item : g_wh_ui_live_.originalNativeIcons)
+                    if (WarehouseUiOwns_(dlg, item)) item->ShowActivate();
+                g_wh_ui_live_.nativeIconsReady = false;
+                return;
+            }
+            dlg->AddItem(icon);
+            icon->HideDeactivate();
+            g_wh_ui_live_.nativeIcons[i][kind] = icon;
+        }
+    }
+    g_wh_ui_live_.nativeIconsReady = true;
+    WarehouseUiSetNativeIconLayer_(dlg, g_wh_ui_live_.expanded);
+}
+
+static void WarehouseUiRefreshNativeIcons_(H3BaseDlg* dlg) noexcept
+{
+    if (!dlg || !g_wh_ui_live_.hero || !g_wh_ui_live_.nativeIconsReady) return;
+    g_wh_ui_live_.scrollDefEnabled = g_wh_ui_scroll_enabled_
+        && *g_wh_ui_scroll_enabled_ != 0;
+    for (int i = 0; i < kWhUiSlotCount_; ++i) {
+        const auto& record = g_wh_ui_live_.hero->backpackArtifacts[i];
+        const auto view = warehouseui::MakeIconView(record.id, record.subtype,
+            g_wh_ui_live_.scrollDefEnabled);
+        for (int kind = 0; kind < 2; ++kind) {
+            H3DlgDef* icon = g_wh_ui_live_.nativeIcons[i][kind];
+            if (!WarehouseUiOwns_(dlg, icon)) continue;
+            if (view.visible && view.kind == kind) {
+                icon->SetFrame(view.frame);
+                icon->ShowActivate();
+            } else icon->HideDeactivate();
+        }
+    }
+}
+
+static void WarehouseUiSetNativeIconLayer_(H3BaseDlg* dlg, bool) noexcept
+{
+    if (!dlg || !g_wh_ui_live_.nativeIconsReady) return;
+    // 自有覆盖层在整个 modal 生命周期内作为唯一可见图标层。SetFrame 不会
+    // 替换 loadedDef；重新启用原件会在转移后显示旧帧，且无法处理“普通宝物↔卷轴”资源切换。
+    for (H3DlgItem* item : g_wh_ui_live_.originalNativeIcons)
+        if (WarehouseUiOwns_(dlg, item)) item->HideDeactivate();
+    WarehouseUiRefreshNativeIcons_(dlg);
+}
+
+static void WarehouseUiRefreshAfterMove_(H3BaseDlg* dlg) noexcept
+{
+    if (!dlg || g_wh_ui_live_.dialog != dlg) return;
+    g_wh_ui_live_.flowActive = false;
+    g_wh_ui_live_.flow = {};
+    WarehouseUiRefreshNativeIcons_(dlg);
+    WarehouseUiRefresh_(dlg, true);
 }
 
 static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
@@ -276,20 +363,23 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
     }
     if (msg->command != eMsgCommand::ITEM_COMMAND)
         return false;
-    const bool leftDown = msg->subtype == eMsgSubtype::LBUTTON_DOWN;
-    const bool leftClick = msg->subtype == eMsgSubtype::LBUTTON_CLICK;
-    if (!leftDown && !leftClick) return false;
     const int id = msg->itemId;
     const int heroId = g_wh_ui_live_.hero->id;
     const int ownerId = g_wh_ui_live_.hero->owner;
+    const bool leftDown = msg->subtype == eMsgSubtype::LBUTTON_DOWN;
+    const bool leftClick = msg->subtype == eMsgSubtype::LBUTTON_CLICK;
+    if (!leftDown && !leftClick) return false;
+    // DOWN只中和，不做事务；所有仓库动作只在 CLICK 运行一次。
+    if (leftDown) {
+        // 展开态：覆盖层宝物图标（2000..2063）的按下由本模块接管；
+        // 原生槽命中区 1000..1063 的按下仍透传，保持原版按压/提示路径。
+        if (g_wh_ui_live_.expanded && id >= 2000 && id < 2064) return true;
+        return warehouseui::ConsumeWarehouseDown(id);
+    }
     // item状态机已在callback之前处理按下；只中和callback的未知ID关闭分支。
     // 按钮及页签动作只在释放CLICK执行一次。
-    if (id == kWhUiOpenId_ || id == kWhUiCloseId_
-        || id == kWhUiTakeAllId_ || id == kWhUiPutAllId_) {
-        if (leftDown) return true;
-    }
-    if (id >= 30300 && id <= 30311 && leftDown) return true;
     if (!g_wh_ui_live_.expanded && id != kWhUiOpenId_) return false;
+    if (!warehouseui::ExecutesWarehouseAction(static_cast<int>(msg->subtype))) return true;
     if (id >= 1000 && id < 1064) {
         warehouse::NativeBackpack native;
         WarehouseUiCopyNative_(g_wh_ui_live_.hero, native);
@@ -304,24 +394,21 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
             static_cast<unsigned long long>(g_wh_ui_live_.token));
         return true;
     }
-    if (id >= 2000 && id < 2064 && g_wh_ui_live_.expanded) {
-        // 展开态下点击宝物图标 (DEF id=2000..2063) 也应作为仓库事务的
-        // 背包侧选择来源；right-click 交还原生信息路径（返回 false）。
-        if (leftDown || leftClick) {
-            const int slot = id - 2000;
-            warehouse::NativeBackpack native;
-            WarehouseUiCopyNative_(g_wh_ui_live_.hero, native);
-            g_wh_ui_live_.flow = warehouseui::Flow(native,
-                g_wh_ui_live_.hero->backpackCount, heroId, ownerId,
-                g_warehouse_.mutationEpoch, g_wh_ui_live_.token);
-            if (g_wh_ui_live_.flow.IsValid()) {
-                g_wh_ui_live_.flow.Select(static_cast<std::size_t>(slot));
-                g_wh_ui_live_.flowActive = true;
-                LogInfo("仓库UI: 已从宝物图标选择背包槽=%d hero=%d", slot, heroId);
-            }
-            return true;
+    if (id >= 2000 && id < 2064) {
+        // 展开态下宝物图标（原生 DEF id=2000..2063，覆盖层同 ID）就是背包侧
+        // 选择来源；不中和就会落到原生“未知 ID”关闭分支。
+        const int slot = id - 2000;
+        warehouse::NativeBackpack native;
+        WarehouseUiCopyNative_(g_wh_ui_live_.hero, native);
+        g_wh_ui_live_.flow = warehouseui::Flow(native,
+            g_wh_ui_live_.hero->backpackCount, heroId, ownerId,
+            g_warehouse_.mutationEpoch, g_wh_ui_live_.token);
+        if (g_wh_ui_live_.flow.IsValid()) {
+            g_wh_ui_live_.flow.Select(static_cast<std::size_t>(slot));
+            g_wh_ui_live_.flowActive = true;
+            LogInfo("仓库UI: 已从宝物图标选择背包槽=%d hero=%d", slot, heroId);
         }
-        return false;
+        return true;
     }
     if (id >= kWhUiSlotBase_ && id < kWhUiSlotBase_ + kWhUiSlotCount_) {
         const int local = id - kWhUiSlotBase_;
@@ -340,7 +427,7 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
                 g_wh_ui_live_.flowActive = false;
                 LogInfo("仓库UI: 放入成功 hero=%d slot=%d count=%d",
                     heroId, g_wh_ui_live_.flow.SelectedIndex(), count);
-                WarehouseUiCloseAndRefresh_(dlg, msg);
+                WarehouseUiRefreshAfterMove_(dlg);
             } else {
                 LogInfo("仓库UI: 放入拒绝 result=%d hero=%d",
                     static_cast<int>(result), heroId);
@@ -360,7 +447,7 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
             WarehouseUiWriteNative_(g_wh_ui_live_.hero, native, count);
             LogInfo("仓库UI: 取回成功 hero=%d index=%u count=%d", heroId,
                 static_cast<unsigned>(recordIndex), count);
-            WarehouseUiCloseAndRefresh_(dlg, msg);
+            WarehouseUiRefreshAfterMove_(dlg);
         } else {
             LogInfo("仓库UI: 取回拒绝 result=%d hero=%d", static_cast<int>(result), heroId);
         }
@@ -379,7 +466,7 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
         return true;
     }
     if (id == kWhUiOpenId_) {
-        WarehouseUiSetExpanded_(dlg, !g_wh_ui_live_.expanded, true);
+        WarehouseUiSetExpanded_(dlg, true, true);
         return true;
     }
     if (id == kWhUiCloseId_) {
@@ -432,7 +519,7 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
             static_cast<unsigned>(moved), heroId);
         if (result == warehouseui::Result::Ok && moved != 0) {
             WarehouseUiWriteNative_(g_wh_ui_live_.hero, native, count);
-            WarehouseUiCloseAndRefresh_(dlg, msg);
+            WarehouseUiRefreshAfterMove_(dlg);
         } else {
             WarehouseUiRefresh_(dlg, true);
         }
@@ -505,6 +592,7 @@ static void WarehouseUiSetExpanded_(H3BaseDlg* dlg, bool expanded,
     if (!dlg || g_wh_ui_live_.dialog != dlg || g_wh_ui_live_.expanded == expanded)
         return;
     if (!expanded) {
+        WarehouseUiSetNativeIconLayer_(dlg, false);
         for (std::size_t i = g_wh_ui_live_.panelItemCount; i > 0; --i)
             g_wh_ui_live_.panelItems[i - 1]->HideDeactivate();
         g_wh_ui_live_.expanded = false;
@@ -519,6 +607,7 @@ static void WarehouseUiSetExpanded_(H3BaseDlg* dlg, bool expanded,
         return;
     }
     g_wh_ui_live_.expanded = true;
+    WarehouseUiSetNativeIconLayer_(dlg, true);
     for (std::size_t i = 0; i < g_wh_ui_live_.panelItemCount; ++i)
         g_wh_ui_live_.panelItems[i]->ShowActivate();
     // 面板可见后再画外框阴影（原生 +0x6620 右/底暗化条），
@@ -595,6 +684,13 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
     g_wh_ui_live_.layout = layout;
     g_wh_ui_live_.flow = warehouseui::Flow(native, count, hero->id, hero->owner,
         g_warehouse_.mutationEpoch, token);
+    WarehouseUiPrepareNativeIcons_(dlg);
+    if (!g_wh_ui_live_.nativeIconsReady) {
+        LogError("仓库UI: 无法建立完整原生背包图标，保留原生模式");
+        WarehouseUiSetNativeIconLayer_(dlg, false);
+        WarehouseUiDetach_(dlg);
+        return;
+    }
 
     // 完整复用扩展窗口实际背景生成器，保留其 HD 32bit 画布/玩家色/底部状态凹槽。
     // 第三轮错误：把256x256源图的GetPcx当作405x523可写画布；已彻底删除该路径。
@@ -645,40 +741,42 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
             "", kWhUiGbkWarehouse_, "bigfont.fnt", 0, 0, FALSE, 0, 0);
         WarehouseUiAdd_(dlg, 0, 0, g_wh_ui_live_.openButton);
     }
-    // 标题只有“仓库”，使用烘焙中文PCX，内容仍由当前hero.id索引。
-    g_wh_ui_live_.title = WarehouseUiCreateTitle_(layout.warehouse.x
-        + (warehouseui::kPanelWidth - kWhUiTitleWidth_) / 2,
-        layout.warehouse.y + 20, kWhUiTitleId_);
-    if (!g_wh_ui_live_.title) {
-        g_wh_ui_live_.titleFallback = H3DlgText::Create(layout.warehouse.x,
-            layout.warehouse.y + warehouseui::kTitleOffsetY,
-            warehouseui::kPanelWidth, warehouseui::kTitleHeight,
-            kWhUiGbkWarehouse_, kWhUiTitleFont_, eTextColor::REGULAR,
-            kWhUiTitleId_, eTextAlignment::MIDDLE_CENTER, 0);
-        g_wh_ui_live_.title = g_wh_ui_live_.titleFallback;
-    }
+    // 标题完全复用原生背包：405x30、bigfont、REGULAR、居中。
+    g_wh_ui_live_.titleFallback = H3DlgText::Create(layout.warehouse.x,
+        layout.warehouse.y + warehouseui::kTitleOffsetY,
+        warehouseui::kPanelWidth, warehouseui::kTitleHeight,
+        kWhUiGbkWarehouse_, kWhUiTitleFont_, eTextColor::REGULAR,
+        kWhUiTitleId_, eTextAlignment::MIDDLE_CENTER, 0);
+    g_wh_ui_live_.title = g_wh_ui_live_.titleFallback;
     WarehouseUiAddPanelItem_(dlg, g_wh_ui_live_.title);
-    const int buttonIds[3] = { kWhUiCloseId_, 30201, 30202 };
+    const int buttonIds[3] = { kWhUiCloseId_, kWhUiPutAllId_, kWhUiTakeAllId_ };
+    const int visualKinds[3] = { 1, 3, 2 };
     for (int kind = 1; kind < 4; ++kind) {
-        const int x = kind == 2 ? layout.warehouse.x + 8
-            : layout.warehouse.x + layout.warehouse.width - kWhUiBtnWidth_ - 8;
-        const int y = layout.warehouse.y + (kind == 1 ? 18 : 50);
-        const WarehouseButtonPair_ pair = WarehouseUiCreateButton_(kind,
+        const int visualKind = visualKinds[kind - 1];
+        const bool close = kind == 1;
+        const int width = close ? kWhUiCloseButtonWidth_ : kWhUiButtonWidth_;
+        const int height = close ? kWhUiCloseButtonHeight_ : kWhUiButtonHeight_;
+        const int x = close ? layout.warehouse.x + layout.warehouse.width - width
+            : kind == 2 ? layout.warehouse.x + 8
+            : layout.warehouse.x + layout.warehouse.width - width - 8;
+        const int y = close ? layout.warehouse.y : layout.warehouse.y + 50;
+        const WarehouseButtonPair_ pair = WarehouseUiCreateButton_(visualKind,
             x, y, buttonIds[kind - 1]);
         WarehouseUiAddPanelItem_(dlg, pair.visual);
         WarehouseUiAddPanelItem_(dlg, pair.def);
         H3DlgItem* button = pair.def;
         if (!button) {
-            const char* captions[3] = { kWhUiGbkClose_, kWhUiGbkTakeAll_, kWhUiGbkPutAll_ };
-            button = H3DlgCaptionButton::Create(x, y, 66, 32, buttonIds[kind - 1],
-                "", captions[kind - 1], "smallfont.fnt", 0, 0, FALSE, 0, 0);
+            const char* caption = kind == 1 ? "X"
+                : kind == 2 ? kWhUiGbkPutAll_ : kWhUiGbkTakeAll_;
+            button = H3DlgCaptionButton::Create(x, y, width, height,
+                buttonIds[kind - 1], "", caption, "smallfont.fnt", 0, 0, FALSE, 0, 0);
             WarehouseUiAddPanelItem_(dlg, button);
         }
         if (kind == 1) g_wh_ui_live_.closeButton = button;
-        if (kind == 2) g_wh_ui_live_.takeAllButton = button;
-        if (kind == 3) g_wh_ui_live_.putAllButton = button;
+        if (kind == 2) g_wh_ui_live_.putAllButton = button;
+        if (kind == 3) g_wh_ui_live_.takeAllButton = button;
     }
-    // 中间页签行：左右箭头 + 四个可见标题槽，14项可横向滚动。
+    // 中间页签行：左右箭头 + 四个可见标题槽，12项可横向滚动。
     for (int i = 0; i < kWhUiTabSlotCount_; ++i) {
         const WarehouseTabPair_ pair = WarehouseUiCreateTab_(i,
             layout.warehouse.x + 102 + i * 48,
@@ -754,6 +852,7 @@ static void WarehouseUiDetach_(H3BaseDlg* dlg) noexcept
     const std::uint64_t token = g_wh_ui_live_.token;
     *reinterpret_cast<UINT32*>(reinterpret_cast<BYTE*>(dlg) + 0x70) =
         reinterpret_cast<UINT32>(g_wh_ui_live_.originalCallback);
+    WarehouseUiSetNativeIconLayer_(dlg, false);
     WarehouseUiRestoreSaveUnder_();
     WarehouseUiRestoreButtons_(dlg);
     WarehouseUiResetTabs_();
@@ -799,24 +898,8 @@ static int __stdcall WarehouseUiCallback_(void* self, H3Msg* msg)
         }
         if (consume) WarehouseUiNeutralizeMessage_(msg);
     } __except (GuardCrashFilter_(GUARD_WH_UI_POST_COMMON, GetExceptionInformation())) {}
-    // 原生 callback 永远在自有逻辑之外、恰好一次；异常不吞原版路径。
-    // 成功转移的关闭/重建收尾用生产共用 helper 保证顺序：原生先返回，
-    // 之后才写 -2、CloseDialog 并返回 2（modal loop 的退出条件）。
-    return warehouseui::CallNativeThenFinalize(
-        g_wh_ui_live_.closePending,
-        [&]() { return original ? original(self, msg) : 0; },
-        [&]() -> int {
-            g_wh_ui_live_.closePending = false;
-            int closeResult = 2;
-            __try {
-                *reinterpret_cast<int*>(reinterpret_cast<BYTE*>(dlg) + 0x7C) = -2;
-                if (msg) closeResult = msg->CloseDialog();
-            } __except (GuardCrashFilter_(GUARD_WH_UI_POST_COMMON,
-                                          GetExceptionInformation())) {
-                closeResult = 2;
-            }
-            return closeResult;
-        });
+    // 原生 callback 永远在自有逻辑之外、恰好一次；不再因转移写 -2 或 CloseDialog。
+    return original ? original(self, msg) : 0;
 }
 
 static int __stdcall OnWarehouseUiModal_(LoHook*, HookContext* context)
@@ -854,6 +937,7 @@ void InstallWarehouseUiStageB_()
     HMODULE module = GetModuleHandleW(L"HD_SOD.dll");
     if (!module) return;
     const UINT32 base = reinterpret_cast<UINT32>(module);
+    g_wh_ui_scroll_enabled_ = reinterpret_cast<const int*>(base + 0x157FB8);
     g_wh_ui_shadow_ = base + 0x6620; // 完整背包外框阴影（与 0x039A00 构造同一函数）
     g_wh_ui_skin_factory_ = reinterpret_cast<WarehouseSkinFactory_>(base + 0x0FADB0);
     g_wh_ui_modal_hook_ = _PI->WriteLoHook(base + kWhUiModalSiteRva_,

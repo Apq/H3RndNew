@@ -36,10 +36,29 @@ $files = @(
     @{ Local = Join-Path $PSScriptRoot '使用说明.txt';         Entry = '热血插件/使用说明.txt' }
 )
 
+$expectedAssets = @(
+    foreach ($button in @('open', 'close', 'take', 'put')) {
+        foreach ($state in 0..3) { "btn_$button$state.pcx" }
+    }
+    foreach ($tab in 0..11) {
+        foreach ($state in @('n', 's')) { 'tab{0:00}{1}.pcx' -f $tab, $state }
+    }
+    'arrow_prev0.pcx'; 'arrow_prev1.pcx'; 'arrow_next0.pcx'; 'arrow_next1.pcx'
+)
 $uiAssets = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'whui') -Filter '*.pcx' -File)
-if ($uiAssets.Count -ne 49) { throw "仓库UI素材不完整：期望49个PCX，实际$($uiAssets.Count)" }
+$assetNames = @($uiAssets | ForEach-Object { $_.Name })
+if ($uiAssets.Count -ne 44 -or @(Compare-Object $expectedAssets $assetNames).Count -ne 0) {
+    throw "仓库UI素材清单不匹配：期望44个指定PCX，实际$($uiAssets.Count)"
+}
 foreach ($asset in $uiAssets) {
     $files += @{ Local = $asset.FullName; Entry = '热血插件/whui/' + $asset.Name }
+}
+
+# 输出ZIP创建/覆盖之前完成源文件校验，避免缺素材时留下半包。
+foreach ($file in $files) {
+    if (-not (Test-Path -LiteralPath $file.Local -PathType Leaf)) {
+        throw "打包文件缺失: $($file.Local)"
+    }
 }
 
 $version = Get-PackVersion

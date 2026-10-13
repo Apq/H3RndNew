@@ -30,17 +30,17 @@ enum class TabKind : std::uint8_t {
     Ring,          // 戒指（左右手）
     Feet,          // 靴子
     Misc,          // 杂物（MISC1..MISC5）
-    Machine,       // 机械（弩车/弹药车/急救帐篷/投石车）
-    Spellbook      // 魔法书
+    Machine,       // 原生战争机器槽，不进入背包页签
+    Spellbook      // 原生魔法书槽，不进入背包页签
 };
 
-inline constexpr std::size_t kTabCount = 14;
+// 机械与魔法书不会进入背包，也就不会进入仓库；自 2026-10-13 起不再列页签。
+inline constexpr std::size_t kTabCount = 12;
 
 inline constexpr TabKind kTabOrder[kTabCount] = {
     TabKind::Regular, TabKind::Scroll, TabKind::Equipment, TabKind::Head,
     TabKind::Shoulders, TabKind::Neck, TabKind::Weapon, TabKind::Shield,
-    TabKind::Torso, TabKind::Ring, TabKind::Feet, TabKind::Misc,
-    TabKind::Machine, TabKind::Spellbook};
+    TabKind::Torso, TabKind::Ring, TabKind::Feet, TabKind::Misc};
 
 // 与 WarehouseUiFlow.hpp / H3 原版一致的常量（避免跨头文件耦合，这里再声明一次）。
 inline constexpr int kTabScrollArtifactId = 1;   // eArtifacts::SPELL_SCROLL
@@ -61,6 +61,8 @@ inline TabKind SlotTab(int slot) noexcept {
     case 5: return TabKind::Torso;
     case 6: case 7: return TabKind::Ring;
     case 8: return TabKind::Feet;
+    // 原生 NSlots::eArtifactSlots：MISC1..MISC4 = 9..12、MISC5 = 18；
+    // BALLISTA/AMMO_CART/FIRST_AID_TENT/CATAPULT = 13..16；SPELLBOOK = 17。
     case 9: case 10: case 11: case 12: case 18: return TabKind::Misc;
     case 13: case 14: case 15: case 16: return TabKind::Machine;
     case 17: return TabKind::Spellbook;
@@ -76,9 +78,13 @@ inline TabKind BaseTab(int artifactId, int slot) noexcept {
 }
 
 // 当前页签是否显示该宝物。artifactId<0（空格）永不匹配。
+inline bool IsBackpackSlot(int slot) noexcept {
+    return slot <= 12 || slot >= 18;
+}
+
 inline bool TabMatches(TabKind tab, int artifactId, int slot) noexcept {
-    if (artifactId < 0) return false;
-    if (tab == TabKind::Regular) return true;   // 常规 = 全部入口
+    if (artifactId < 0 || !IsBackpackSlot(slot)) return false;
+    if (tab == TabKind::Regular) return true;   // 常规 = 全部可进入背包的道具
     const TabKind base = BaseTab(artifactId, slot);
     if (tab == TabKind::Equipment)
         return base != TabKind::Regular && base != TabKind::Scroll;
@@ -87,7 +93,8 @@ inline bool TabMatches(TabKind tab, int artifactId, int slot) noexcept {
 
 inline constexpr bool IsPositionTab(TabKind tab) noexcept {
     return tab != TabKind::Regular && tab != TabKind::Scroll
-        && tab != TabKind::Equipment;
+        && tab != TabKind::Equipment && tab != TabKind::Machine
+        && tab != TabKind::Spellbook;
 }
 
 // ---- 页签行左右滚动窗口 ----
