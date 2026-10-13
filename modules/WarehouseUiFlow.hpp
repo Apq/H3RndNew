@@ -78,6 +78,14 @@ inline constexpr int kTitleHeight = 30;
 inline constexpr int kTitleOffsetY = 18;
 inline constexpr int kGridOriginDX = 18;
 inline constexpr int kGridOriginDY = 50 + kTabRowHeight; // 82
+// 原生背包网格原点（无 Tab 行偏移）：完整背包窗口自身网格在 (18,50)。
+// 覆盖图标必须用这个值，误用仓库的 82 会整体下移 32px 造成“网格与物品错位”。
+inline constexpr int kBackpackGridOriginDY = 50;
+// 分页栏（round-7）：两侧箭头（复用 arrow 素材 18x22）+ 中间 4 个页码按钮。
+inline constexpr int kPagerButtonWidth = 36;
+inline constexpr int kPagerButtonHeight = 22;
+inline constexpr int kPagerButtonGap = 4;
+inline constexpr int kPagerButtonCount = 4;
 inline constexpr int kGridPitch = 46;
 inline constexpr int kGridHitSize = 47;
 inline constexpr int kGridDefSize = 44;

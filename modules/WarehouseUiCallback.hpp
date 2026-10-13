@@ -16,10 +16,12 @@ inline constexpr bool IsNativeBackpackGestureId(int id) noexcept {
     return (id >= 1000 && id < 1064) || (id >= 2000 && id < 2064);
 }
 inline constexpr bool IsWarehouseControlId(int id) noexcept {
-    // 30050/30051 翻页箭头；30060..30202 覆盖关闭/打开/一键取出/一键放入与
-    // 30100..30163 仓库槽；30300..30311 页签。30000..30004 是背景/边框，不吞。
+    // 30050/30051 分页箭头；30060..30202 覆盖关闭/打开/一键取出/一键放入与
+    // 30100..30163 仓库槽；30300..30311 页签；30400..30403 分页页码按钮。
+    // 30000..30004 是背景/边框，不吞。
     return id == 30050 || id == 30051
-        || (id >= 30060 && id <= 30202) || (id >= 30300 && id <= 30311);
+        || (id >= 30060 && id <= 30202) || (id >= 30300 && id <= 30311)
+        || (id >= 30400 && id <= 30403);
 }
 inline constexpr bool ConsumeWarehouseDown(int id) noexcept {
     return IsWarehouseControlId(id) && !IsNativeBackpackGestureId(id);

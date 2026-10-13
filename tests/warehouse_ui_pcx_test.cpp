@@ -286,7 +286,9 @@ void CheckRealAssets_()
     names.push_back("arrow_prev1.pcx");
     names.push_back("arrow_next0.pcx");
     names.push_back("arrow_next1.pcx");
-    Check_(names.size() == 44, "44 warehouse PCX names listed");
+    names.push_back("pager_n.pcx");
+    names.push_back("pager_s.pcx");
+    Check_(names.size() == 46, "46 warehouse PCX names listed");
 
     std::size_t nonEmpty = 0;
     for (const std::string& name : names) {
@@ -300,6 +302,8 @@ void CheckRealAssets_()
             width = 66; height = 32;
         } else if (name.find("tab") == 0) {
             width = 44; height = 22;
+        } else if (name.find("pager_") == 0) {
+            width = 36; height = 22;
         } else {
             width = 18; height = 22;
         }
@@ -320,7 +324,7 @@ void CheckRealAssets_()
         Check_(hasNonZero && hasMultipleColors, "warehouse PCX has color distribution");
         ++nonEmpty;
     }
-    Check_(nonEmpty == 44, "all 44 warehouse PCX files decoded");
+    Check_(nonEmpty == 46, "all 46 warehouse PCX files decoded");
 }
 
 } // namespace
@@ -330,6 +334,6 @@ void RunWarehouseUiPcxTests_()
     CheckFixtureDecoding_();
     CheckFailureFixtures_();
     CheckRealAssets_();
-    std::printf("PASS warehouse UI PCX: 44 assets and malformed-stream gates (%d checks)\n",
+    std::printf("PASS warehouse UI PCX: 46 assets and malformed-stream gates (%d checks)\n",
                 g_checks_);
 }

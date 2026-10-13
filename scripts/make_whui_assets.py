@@ -11,6 +11,9 @@
   whui/btn_put{0..3}.pcx     66x32  "一键放入"
   whui/tab{00..11}{n,s}.pcx  44x22  12 个分类页签
   whui/arrow_{prev,next}{0,1}.pcx 18x22 滚动箭头
+  whui/pager_{n,s}.pcx       36x22  分页页码按钮底图（无文字，数字运行时叠加）
+
+共 46 张 PCX：btn 16 + tab 24 + arrow 4 + pager 2。
 
 用法：
     pythonw scripts/make_whui_assets.py        # 在 H3RndNew 目录下执行
@@ -33,6 +36,7 @@ BTN_W, BTN_H = 66, 32
 CLOSE_W, CLOSE_H = 24, 24
 TAB_W, TAB_H = 44, 22
 ARROW_W, ARROW_H = 18, 22
+PAGER_W, PAGER_H = 36, 22
 INK_NORMAL = (255, 231, 160)
 INK_HIGHLIGHT = (255, 248, 214)
 INK_PRESSED = (222, 190, 122)
@@ -259,18 +263,30 @@ def make_close(state):
     return canvas
 
 
-def make_tab(text, selected):
-    w, h = TAB_W, TAB_H
+def make_panel_canvas(w, h, selected):
+    """页签/页码共用底板：同参考图纹理平铺 + tab n/s 同源的两态亮度差异。"""
     fill = mirror_tile(texture_patch(w - 2, h - 2), w - 2, h - 2)
     if selected:
         fill = scale_color(fill, (1.35, 1.32, 1.28))
-        ink = INK_HIGHLIGHT
     else:
         fill = scale_color(fill, (0.92, 0.92, 0.92))
-        ink = INK_NORMAL
     canvas = Image.new("RGB", (w, h))
     canvas.paste(fill, (1, 1))
-    stamp_text(canvas, text, 13, ink, w - 6, dy=-1)
+    return canvas
+
+
+def make_tab(text, selected):
+    canvas = make_panel_canvas(TAB_W, TAB_H, selected)
+    ink = INK_HIGHLIGHT if selected else INK_NORMAL
+    stamp_text(canvas, text, 13, ink, TAB_W - 6, dy=-1)
+    gold_border(canvas)
+    return canvas
+
+
+def make_pager(selected):
+    """分页页码按钮底图：沿用页签构建路径（同参考图纹理、同两态差异、同金框），
+    仅尺寸 36x22 且跳过文字绘制——页码数字由运行时 H3DlgText 叠加。"""
+    canvas = make_panel_canvas(PAGER_W, PAGER_H, selected)
     gold_border(canvas)
     return canvas
 
@@ -337,11 +353,17 @@ def main():
             save_pcx(im, "arrow_%s%d.pcx" % (key, disabled))
             preview_cells.append(im)
 
+    for suffix, selected in (("n", False), ("s", True)):
+        im = make_pager(selected)
+        save_pcx(im, "pager_%s.pcx" % suffix)
+        preview_cells.append(im)
+
     # 所有按钮统一每行4列（normal/pressed/highlight/disabled）。
     scale = 3
     cell_w = (BTN_W + 8) * scale
     cell_h = (BTN_H + 8) * scale
-    sheet = Image.new("RGB", (cell_w * 4, cell_h * 11), (48, 48, 66))
+    sheet_rows = (len(preview_cells) + 3) // 4
+    sheet = Image.new("RGB", (cell_w * 4, cell_h * sheet_rows), (48, 48, 66))
     button_count = len(buttons) * len(STATE_ORDER) + len(STATE_ORDER)
     for i, im in enumerate(preview_cells):
         big = im.resize((im.size[0] * scale, im.size[1] * scale), Image.NEAREST)

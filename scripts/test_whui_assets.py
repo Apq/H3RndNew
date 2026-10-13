@@ -18,6 +18,8 @@ EXPECTED = {
     **{f'tab{tab:02d}{state}.pcx': (44, 22) for tab in range(12) for state in ('n', 's')},
     **{f'arrow_{direction}{state}.pcx': (18, 22)
        for direction in ('prev', 'next') for state in range(2)},
+    'pager_n.pcx': (36, 22),
+    'pager_s.pcx': (36, 22),
 }
 
 
@@ -57,7 +59,7 @@ def decode_pcx(data, size):
 
 class WarehouseAssetsTest(unittest.TestCase):
     def test_exact_manifest(self):
-        self.assertEqual(len(EXPECTED), 44)
+        self.assertEqual(len(EXPECTED), 46)
         self.assertEqual({p.name for p in ASSETS.glob('*.pcx')}, set(EXPECTED))
         for obsolete in ('title.pcx', 'tab12n.pcx', 'tab12s.pcx', 'tab13n.pcx', 'tab13s.pcx'):
             self.assertFalse((ASSETS / obsolete).exists())
@@ -75,6 +77,7 @@ class WarehouseAssetsTest(unittest.TestCase):
                   for key in ('open', 'close', 'take', 'put')]
         groups += [[f'tab{tab:02d}{state}.pcx' for state in ('n', 's')] for tab in range(12)]
         groups += [[f'arrow_{key}{state}.pcx' for state in range(2)] for key in ('prev', 'next')]
+        groups += [['pager_n.pcx', 'pager_s.pcx']]
         for names in groups:
             with self.subTest(group=names):
                 self.assertEqual(len({(ASSETS / name).read_bytes() for name in names}), len(names))
@@ -85,14 +88,34 @@ class WarehouseAssetsTest(unittest.TestCase):
                     if isinstance(node, ast.Assign) and any(
                         isinstance(target, ast.Name) and target.id == 'TABS' for target in node.targets))
         self.assertEqual(tabs, TABS)
+        pager_size = None
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            target_names = set()
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    target_names.add(target.id)
+                elif isinstance(target, ast.Tuple):
+                    target_names.update(elt.id for elt in target.elts
+                                        if isinstance(elt, ast.Name))
+            if {'PAGER_W', 'PAGER_H'} <= target_names:
+                pager_size = ast.literal_eval(node.value)
+        self.assertEqual(pager_size, (36, 22))
+        pager_fn = next(node for node in tree.body
+                        if isinstance(node, ast.FunctionDef) and node.name == 'make_pager')
+        called = {call.func.id for call in ast.walk(pager_fn)
+                  if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
+        self.assertNotIn('stamp_text', called)
 
     def test_preview_matches_every_asset(self):
         names = [f'btn_{key}{state}.pcx' for key in ('open', 'take', 'put', 'close')
                  for state in range(4)]
         names += [f'tab{tab:02d}{state}.pcx' for tab in range(12) for state in ('n', 's')]
         names += [f'arrow_{key}{state}.pcx' for key in ('prev', 'next') for state in range(2)]
+        names += ['pager_n.pcx', 'pager_s.pcx']
         with Image.open(ASSETS / 'preview.png') as preview:
-            self.assertEqual(preview.size, (888, 1320))
+            self.assertEqual(preview.size, (888, 1440))
             for index, name in enumerate(names):
                 with self.subTest(asset=name), Image.open(ASSETS / name) as image:
                     x, y = index % 4 * 222 + 4, index // 4 * 120 + 4
@@ -114,20 +137,23 @@ class WarehouseAssetsTest(unittest.TestCase):
                 for direction in ('prev', 'next'):
                     for state in range(2):
                         self.assertIn(f"'arrow_{direction}{state}.pcx'", text)
-                self.assertRegex(text, r'\.Count -ne 44')
+                for suffix in ('n', 's'):
+                    self.assertIn(f"'pager_{suffix}.pcx'", text)
+                self.assertRegex(text, r'\.Count -ne 46')
                 self.assertIn('Compare-Object $expectedAssets $assetNames', text)
                 gate = text.index('Compare-Object $expectedAssets $assetNames')
                 first_write = text.index('Copy-Item') if name == 'deploy.ps1' else text.index('$version = Get-PackVersion')
                 self.assertLess(gate, first_write)
 
-    def test_cpp_consumer_uses_44(self):
+    def test_cpp_consumer_uses_46(self):
         text = (ROOT / 'tests/warehouse_ui_pcx_test.cpp').read_text(encoding='utf-8')
         self.assertIn('tab < 12', text)
-        self.assertIn('names.size() == 44', text)
-        self.assertIn('nonEmpty == 44', text)
+        self.assertIn('names.size() == 46', text)
+        self.assertIn('nonEmpty == 46', text)
         self.assertNotRegex(text, r'\b48\b')
         for dimensions in ('width = 24; height = 24;', 'width = 66; height = 32;',
-                           'width = 44; height = 22;', 'width = 18; height = 22;'):
+                           'width = 44; height = 22;', 'width = 18; height = 22;',
+                           'width = 36; height = 22;'):
             self.assertIn(dimensions, text)
 
 

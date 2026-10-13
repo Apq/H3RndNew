@@ -584,10 +584,17 @@ void CheckRound6CallbackAndIcons() {
               && ordinaryScroll.kind == 0 && ordinaryScroll.frame == 1,
           "scrolls select def.SpScrArt only when enabled");
     Check(warehouseui::ConsumeWarehouseDown(30201)
+              && warehouseui::ConsumeWarehouseDown(30400)
+              && warehouseui::ConsumeWarehouseDown(30403)
               && !warehouseui::ConsumeWarehouseDown(1000)
               && warehouseui::ExecutesWarehouseAction(0xD)
               && !warehouseui::ExecutesWarehouseAction(0xC),
-          "warehouse controls consume DOWN and commit one CLICK");
+          "warehouse and pager controls consume DOWN and commit one CLICK");
+    Check(warehouseui::kPagerButtonCount == 4
+              && warehouseui::kPagerButtonWidth == 36
+              && warehouseui::kPagerButtonHeight == 22
+              && warehouseui::kBackpackGridOriginDY == 50,
+          "round-7 pager geometry and backpack grid origin constants");
 }
 
 void CheckDepositAllBatch() {
