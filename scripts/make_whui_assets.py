@@ -12,8 +12,9 @@
   whui/tab{00..11}{n,s}.pcx  44x22  12 个分类页签
   whui/arrow_{prev,next}{0,1}.pcx 18x22 滚动箭头
   whui/pager_{n,s}.pcx       36x22  分页页码按钮底图（无文字，数字运行时叠加）
+  whui/tidy_{n,s}.pcx        36x22  "整理"按钮（中文烘焙，普通/高亮两态）
 
-共 46 张 PCX：btn 16 + tab 24 + arrow 4 + pager 2。
+共 48 张 PCX：btn 16 + tab 24 + arrow 4 + pager 2 + tidy 2。
 
 用法：
     pythonw scripts/make_whui_assets.py        # 在 H3RndNew 目录下执行
@@ -37,6 +38,7 @@ CLOSE_W, CLOSE_H = 24, 24
 TAB_W, TAB_H = 44, 22
 ARROW_W, ARROW_H = 18, 22
 PAGER_W, PAGER_H = 36, 22
+TIDY_W, TIDY_H = 36, 22
 INK_NORMAL = (255, 231, 160)
 INK_HIGHLIGHT = (255, 248, 214)
 INK_PRESSED = (222, 190, 122)
@@ -54,6 +56,8 @@ TABS = [
     "常规", "卷轴", "装备", "头部", "肩部", "项链", "武器",
     "盾牌", "胸甲", "戒指", "靴子", "杂物",
 ]
+
+TIDY_TEXT = "整理"
 
 
 def load_font(size):
@@ -291,6 +295,16 @@ def make_pager(selected):
     return canvas
 
 
+def make_tidy(selected):
+    """整理按钮：与页签同源构建路径（同参考图纹理底板、同两态亮度差异、同金框），
+    尺寸沿用页码按钮 36x22；文案「整理」直接烘焙进 PCX——游戏字体不保证中文字形。"""
+    canvas = make_panel_canvas(TIDY_W, TIDY_H, selected)
+    ink = INK_HIGHLIGHT if selected else INK_NORMAL
+    stamp_text(canvas, TIDY_TEXT, 13, ink, TIDY_W - 6, dy=-1)
+    gold_border(canvas)
+    return canvas
+
+
 def make_arrow(glyph, enabled):
     w, h = ARROW_W, ARROW_H
     fill = mirror_tile(texture_patch(w - 2, h - 2), w - 2, h - 2)
@@ -356,6 +370,11 @@ def main():
     for suffix, selected in (("n", False), ("s", True)):
         im = make_pager(selected)
         save_pcx(im, "pager_%s.pcx" % suffix)
+        preview_cells.append(im)
+
+    for suffix, selected in (("n", False), ("s", True)):
+        im = make_tidy(selected)
+        save_pcx(im, "tidy_%s.pcx" % suffix)
         preview_cells.append(im)
 
     # 所有按钮统一每行4列（normal/pressed/highlight/disabled）。

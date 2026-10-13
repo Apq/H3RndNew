@@ -13,7 +13,7 @@ $packsDst = "$gameDir\_HD3_Data\Packs\热血插件"
 $src = "$PSScriptRoot\Release"
 
 try {
-    # 在创建目标目录、复制DLL或任何素材之前，校验全部源文件和精确46项清单。
+    # 在创建目标目录、复制DLL或任何素材之前，校验全部源文件和精确48项清单。
     $dll = Join-Path $src 'H3RndNew.dll'
     $sourceFiles = @($dll, "$PSScriptRoot\H3RndNew.default.ini", "$PSScriptRoot\使用说明.txt")
     foreach ($sourceFile in $sourceFiles) {
@@ -31,11 +31,12 @@ try {
         }
         'arrow_prev0.pcx'; 'arrow_prev1.pcx'; 'arrow_next0.pcx'; 'arrow_next1.pcx'
         'pager_n.pcx'; 'pager_s.pcx'
+        'tidy_n.pcx'; 'tidy_s.pcx'
     )
     $assets = @(Get-ChildItem -LiteralPath $uiAssets -Filter '*.pcx' -File)
     $assetNames = @($assets | ForEach-Object { $_.Name })
-    if ($assets.Count -ne 46 -or @(Compare-Object $expectedAssets $assetNames).Count -ne 0) {
-        throw "仓库UI素材清单不匹配：期望46个指定PCX，实际$($assets.Count)"
+    if ($assets.Count -ne 48 -or @(Compare-Object $expectedAssets $assetNames).Count -ne 0) {
+        throw "仓库UI素材清单不匹配：期望48个指定PCX，实际$($assets.Count)"
     }
 
     New-Item -ItemType Directory -Path $packsDst -Force | Out-Null

@@ -46,6 +46,10 @@ static H3LoadedPcx* g_wh_ui_button_images_[4][4] = {};
 static H3LoadedPcx* g_wh_ui_tab_images_[warehouseui::kTabCount][2] = {};
 static H3LoadedPcx* g_wh_ui_arrow_images_[2][2] = {};
 static H3LoadedPcx* g_wh_ui_pager_images_[2] = {};
+// 整理按钮（round-8）：分页栏左侧预留的按钮位，仅“常规”页显示，文案烘焙在素材里。
+static WarehouseTabPair_ g_wh_ui_tidy_;
+static H3LoadedPcx* g_wh_ui_tidy_images_[2] = {};
+static bool g_wh_ui_tidy_hovered_ = false;
 // 只保存颜色字节，不静态构造会调用游戏地址的palette对象。
 static unsigned char g_wh_ui_palette_[sizeof(H3RGB888) * 256] = {};
 static bool g_wh_ui_images_attempted_ = false, g_wh_ui_images_ready_ = false;
@@ -176,8 +180,16 @@ static void WarehouseUiCacheImages_(H3DlgPcx* source) noexcept {
             warehouseui::kPagerButtonWidth, warehouseui::kPagerButtonHeight, key);
         all = all && g_wh_ui_pager_images_[s] != nullptr;
     }
+    // 整理按钮底图：36x22 两态（“整理”二字直接烘焙，游戏字体不保证中文字形）。
+    for (int s = 0; s < 2; ++s) {
+        _snprintf_s(file, sizeof(file), _TRUNCATE, "tidy_%c.pcx", s ? 's' : 'n');
+        _snprintf_s(key, sizeof(key), _TRUNCATE, "whz%d", s);
+        g_wh_ui_tidy_images_[s] = WarehouseUiLoadOne_(file,
+            warehouseui::kPagerButtonWidth, warehouseui::kPagerButtonHeight, key);
+        all = all && g_wh_ui_tidy_images_[s] != nullptr;
+    }
     g_wh_ui_images_ready_ = all;
-    LogInfo("仓库UI: 46张四态/Tab/分页素材 ready=%d", g_wh_ui_images_ready_ ? 1 : 0);
+    LogInfo("仓库UI: 48张四态/Tab/分页/整理素材 ready=%d", g_wh_ui_images_ready_ ? 1 : 0);
 }
 static bool WarehouseUiImagesReady_() noexcept { return g_wh_ui_images_ready_; }
 
@@ -232,8 +244,12 @@ static void WarehouseUiSetButtonDisabled_(int index, bool disabled) noexcept {
     flags = disabled ? static_cast<UINT16>(flags | 0x20) : static_cast<UINT16>(flags & ~0x20);
     WarehouseUiRefreshButton_(index);
 }
+// 整理按钮（round-8）悬停刷新定义在分页工厂之后，这里只需前置声明——
+// 同一翻译单元内 static 函数必须“先声明后使用”（C3861）。
+static void WarehouseUiUpdateTidyHover_(H3BaseDlg* dlg, H3Msg* msg) noexcept;
 static void WarehouseUiUpdateHover_(H3BaseDlg* dlg, H3Msg* msg) noexcept {
     if (!dlg || !msg || dlg != g_wh_ui_visual_dialog_) return;
+    WarehouseUiUpdateTidyHover_(dlg, msg);
     for (int i = 0; i < 4; ++i) {
         WarehouseButton_& b = g_wh_ui_buttons_[i];
         if (!WarehouseUiVisualOwns_(dlg, b.def) || !WarehouseUiVisualOwns_(dlg, b.visual)) continue;
@@ -272,6 +288,8 @@ static void WarehouseUiResetTabs_() noexcept {
     for (auto& arrow : g_wh_ui_arrows_) arrow = {};
     for (auto& pager : g_wh_ui_pagers_) pager = {};
     for (auto& arrow : g_wh_ui_footer_arrows_) arrow = {};
+    g_wh_ui_tidy_ = {};
+    g_wh_ui_tidy_hovered_ = false;
     g_wh_ui_pager_window_begin_ = 0;
     // native -2重建保留当前分类/偏移，不保留任何对象引用。
 }
@@ -320,6 +338,51 @@ static WarehouseTabPair_ WarehouseUiCreatePager_(int slot, int x, int y,
 }
 static std::size_t WarehouseUiPagerBegin_() noexcept {
     return g_wh_ui_pager_window_begin_;
+}
+// 整理按钮（round-8）：分页栏最左侧预留的按钮位，36x22 两态（普通/悬停）。
+static WarehouseTabPair_ WarehouseUiCreateTidy_(int x, int y, int id) noexcept {
+    WarehouseTabPair_ pair;
+    if (!WarehouseUiImagesReady_()) return pair;
+    pair.label = WarehouseUiCreateVisual_(x, y, warehouseui::kPagerButtonWidth,
+        warehouseui::kPagerButtonHeight, id, g_wh_ui_tidy_images_[0]);
+    pair.hit = H3DlgTransparentItem::Create(x, y, warehouseui::kPagerButtonWidth,
+        warehouseui::kPagerButtonHeight, id);
+    g_wh_ui_tidy_ = pair;
+    g_wh_ui_tidy_hovered_ = false;
+    return pair;
+}
+// 仅“常规”页且仓库展开时可见；切走页签立即 HideDeactivate，避免点到不可见按钮。
+static void WarehouseUiSetTidyVisible_(H3BaseDlg* dlg, bool visible) noexcept {
+    if (WarehouseUiVisualOwns_(dlg, g_wh_ui_tidy_.label)) {
+        if (visible) {
+            g_wh_ui_tidy_hovered_ = false;
+            g_wh_ui_tidy_.label->SetPcx(g_wh_ui_tidy_images_[0]);
+            g_wh_ui_tidy_.label->ShowActivate();
+        } else {
+            g_wh_ui_tidy_hovered_ = false;
+            g_wh_ui_tidy_.label->HideDeactivate();
+        }
+    }
+    if (g_wh_ui_tidy_.hit) {
+        if (visible) g_wh_ui_tidy_.hit->ShowActivate();
+        else g_wh_ui_tidy_.hit->HideDeactivate();
+    }
+}
+static void WarehouseUiUpdateTidyHover_(H3BaseDlg* dlg, H3Msg* msg) noexcept {
+    if (!WarehouseUiVisualOwns_(dlg, g_wh_ui_tidy_.label)
+        || !g_wh_ui_tidy_.label->IsVisible()) {
+        g_wh_ui_tidy_hovered_ = false;
+        return;
+    }
+    const int x = g_wh_ui_tidy_.label->GetX();
+    const int y = g_wh_ui_tidy_.label->GetY();
+    const bool hover = msg && msg->GetX() >= x
+        && msg->GetX() < x + warehouseui::kPagerButtonWidth
+        && msg->GetY() >= y
+        && msg->GetY() < y + warehouseui::kPagerButtonHeight;
+    if (hover == g_wh_ui_tidy_hovered_) return;
+    g_wh_ui_tidy_hovered_ = hover;
+    g_wh_ui_tidy_.label->SetPcx(g_wh_ui_tidy_images_[hover ? 1 : 0]);
 }
 // 刷新分页栏：页码窗口含当前页、当前页高亮；两侧箭头按可翻性换态。
 // 页码超界（不足4页）时按钮整体 HideDeactivate，避免点空白页码。
@@ -389,7 +452,8 @@ static int WarehouseUiArtifactSlot_(int artifactId) noexcept {
     if (artifactId < 0 || artifactId > 143) return warehouseui::kSlotNone;
     __try {
         const H3Artifact artifact(artifactId, -1);
-        return static_cast<int>(artifact.GetSlot());
+        return warehouseui::NormalizeArtifactTableSlot(
+            static_cast<int>(artifact.GetSlot()));
     } __except (GuardCrashFilter_(GUARD_WH_UI_BUTTON_DRAW, GetExceptionInformation())) {
         return warehouseui::kSlotNone;
     }

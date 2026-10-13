@@ -6,6 +6,7 @@
 
 #include "WarehouseCore.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -32,7 +33,15 @@ struct Rect {
         return x < other.Right() && other.x < Right()
             && y < other.Bottom() && other.y < Bottom();
     }
+    constexpr bool Contains(int px, int py) const noexcept {
+        return px >= x && px < Right() && py >= y && py < Bottom();
+    }
 };
+
+// 背包面板区域判定（round-8）：空槽/底板等未知 ID 也要认成“背包内点击”。
+inline constexpr bool PointInRect(int px, int py, const Rect& rect) noexcept {
+    return rect.Contains(px, py);
+}
 
 inline constexpr bool Intersects(const Rect& left, const Rect& right) noexcept {
     return left.Overlaps(right);
@@ -95,6 +104,8 @@ inline constexpr int kGridDefDY = 1;
 inline constexpr int kPagerRowY = kGridOriginDY + 369 + 8; // 459：分页行顶
 inline constexpr int kStatusTextY = kPanelHeight - 18;    // 505：底部状态条（预留）
 inline constexpr std::size_t kGridColumns = 8;
+// 背包网格行数（8x8=64 格）；与仓库面板分页行数同值但语义不同，单独命名。
+inline constexpr std::size_t kGridRows = 8;
 inline constexpr std::size_t kPageRows = 8;
 inline constexpr std::size_t kPageSize = kGridColumns * kPageRows; // 64，与扩展同构
 inline constexpr int kMaxArtifactId = 143;
@@ -282,6 +293,37 @@ inline bool SameNative(const warehouse::NativeBackpack& left,
     for (std::size_t i = 0; i < warehouse::kBackpackCapacity; ++i)
         if (!(left[i] == right[i])) return false;
     return true;
+}
+
+// 展示排序（round-8 用户裁定）：分类页展示道具时相同道具必须连续。
+// 以 (宝物ID, 子类型) 为同一性键做稳定排序，同组内保持原有仓库顺序，
+// 因此只改变展示/取回顺序，不改变仓库存储顺序，也不影响记录下标语义。
+template <typename Records>
+inline void SortRecordIndicesByIdentity(std::vector<std::size_t>& indices,
+                                      const Records& records) {
+    std::stable_sort(indices.begin(), indices.end(),
+        [&records](std::size_t left, std::size_t right) noexcept {
+            if (left >= records.size() || right >= records.size()) return left < right;
+            if (records[left].artifactId != records[right].artifactId)
+                return records[left].artifactId < records[right].artifactId;
+            return records[left].subtype < records[right].subtype;
+        });
+}
+
+// 存储层整理（round-8 用户裁定，“整理”按钮）：直接重排仓库记录本体，
+// 同一性键与展示排序一致；空记录（artifactId<0）一律排到末尾。
+template <typename Records>
+inline void SortRecordsByIdentity(Records& records) {
+    std::stable_sort(records.begin(), records.end(),
+        [](const typename Records::value_type& left,
+           const typename Records::value_type& right) noexcept {
+            const bool leftEmpty = left.artifactId < 0;
+            const bool rightEmpty = right.artifactId < 0;
+            if (leftEmpty != rightEmpty) return !leftEmpty;
+            if (left.artifactId != right.artifactId)
+                return left.artifactId < right.artifactId;
+            return left.subtype < right.subtype;
+        });
 }
 
 class Flow {

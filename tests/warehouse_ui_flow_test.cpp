@@ -597,6 +597,59 @@ void CheckRound6CallbackAndIcons() {
           "round-7 pager geometry and backpack grid origin constants");
 }
 
+// round-8：原生宝物表 position 是 1-based（0 = 无装备位置），必须先归一化再分类；
+// 走查用户实测的三个关键点：头部(1→0)、胸甲(6→5)、戒指(7/8→6/7)、杂物5(19→18)。
+void CheckRound8SlotBaseAndSorting() {
+    using warehouseui::NormalizeArtifactTableSlot;
+    using warehouseui::SlotTab;
+    using warehouseui::TabKind;
+    Check(NormalizeArtifactTableSlot(0) == warehouseui::kSlotNone
+              && NormalizeArtifactTableSlot(-1) == warehouseui::kSlotNone
+              && NormalizeArtifactTableSlot(1) == 0
+              && NormalizeArtifactTableSlot(6) == 5
+              && NormalizeArtifactTableSlot(7) == 6
+              && NormalizeArtifactTableSlot(8) == 7
+              && NormalizeArtifactTableSlot(19) == 18
+              && NormalizeArtifactTableSlot(23) == 23,
+          "artifact table slot is decoded as 1-based with 0 meaning no position");
+    Check(SlotTab(NormalizeArtifactTableSlot(1)) == TabKind::Head
+              && SlotTab(NormalizeArtifactTableSlot(2)) == TabKind::Shoulders
+              && SlotTab(NormalizeArtifactTableSlot(3)) == TabKind::Neck
+              && SlotTab(NormalizeArtifactTableSlot(6)) == TabKind::Torso
+              && SlotTab(NormalizeArtifactTableSlot(7)) == TabKind::Ring
+              && SlotTab(NormalizeArtifactTableSlot(8)) == TabKind::Ring
+              && SlotTab(NormalizeArtifactTableSlot(19)) == TabKind::Misc,
+          "head/cloak/neck/torso/ring/misc5 land on the tabs the user expects");
+
+    // 相同道具必须连续（展示层）。
+    State state;
+    state.heroes[4] = {{42, 0}, {7, 0}, {42, 0}, {1, 9}, {7, 0}, {1, 3}, {42, 0}};
+    std::vector<std::size_t> order;
+    for (std::size_t i = 0; i < state.heroes[4].size(); ++i) order.push_back(i);
+    warehouseui::SortRecordIndicesByIdentity(order, state.heroes[4]);
+    // 排序键是 (宝物ID, 子类型)：1/9 与 1/3 同 ID，子类型 3 在前；同键保持原有先后。
+    Check(order.size() == 7 && order[0] == 5 && order[1] == 3
+              && order[2] == 1 && order[3] == 4 && order[4] == 0
+              && order[5] == 2 && order[6] == 6,
+          "display order groups identical items and keeps original order inside a group");
+
+    // 存储层整理：直接重排记录本体，空记录排最后，同组保持稳定。
+    warehouse::Backpack storage = {{42, 0}, {-1, -1}, {7, 5}, {42, 0}, {7, 1}, {3, 0}};
+    warehouseui::SortRecordsByIdentity(storage);
+    Check(storage.size() == 6
+              && storage[0] == warehouse::ArtifactRecord{3, 0}
+              && storage[1] == warehouse::ArtifactRecord{7, 1}
+              && storage[2] == warehouse::ArtifactRecord{7, 5}
+              && storage[3] == warehouse::ArtifactRecord{42, 0}
+              && storage[4] == warehouse::ArtifactRecord{42, 0}
+              && storage[5].artifactId < 0,
+          "organize sorts the stored records themselves and pushes empty records last");
+    // 幂等：再整理一次结果不变。
+    const warehouse::Backpack once = storage;
+    warehouseui::SortRecordsByIdentity(storage);
+    Check(storage == once, "organize is idempotent");
+}
+
 void CheckDepositAllBatch() {
     State state;
     state.heroes[2] = {{90, 1}};
@@ -798,6 +851,7 @@ void RunWarehouseUiFlowTests_() {
     CheckDepositAllBatch();
     CheckRound6CallbackAndIcons();
     CheckCatalogFilteringAndScrolling();
+    CheckRound8SlotBaseAndSorting();
 
     // 置顶仓库层的点击过滤契约（纯函数，离线可回归）：
     using warehouseui::IsNativeBackpackId;
@@ -816,15 +870,50 @@ void RunWarehouseUiFlowTests_() {
               && !SuppressPinnedClose(false, 0x200, 0xD, 0),
           "collapsed state never suppresses native close");
     Check(SuppressPinnedClose(true, 0x200, 0xD, 0)
-              && SuppressPinnedClose(true, 0x200, 0xC, 777)
-              && !SuppressPinnedClose(true, 0x200, 0xC, 1005)
-              && !SuppressPinnedClose(true, 0x200, 0xC, 2005)
+              && SuppressPinnedClose(true, 0x200, 0xC, 1005)
+              && SuppressPinnedClose(true, 0x200, 0xC, 2005)
               && SuppressPinnedClose(true, 0x200, 0xC, 30004)
               && SuppressPinnedClose(true, 0x200, 0xC, 30200)
+              && SuppressPinnedClose(true, 0x200, 0xC, 777)
+              && !SuppressPinnedClose(true, 0x8, 0, 0)
+              && !SuppressPinnedClose(true, 0x200, 0xA, 777)
               && !SuppressPinnedClose(true, 0x200, 0xE, 777)
-              && !SuppressPinnedClose(true, 2, 1, 0)
-              && !SuppressPinnedClose(true, 0x200, 0xA, 777),
-          "expanded state suppresses outside left gestures but keeps native ids, right-click, Esc");
+              && !SuppressPinnedClose(true, 2, 1, 0),
+          "expanded mode neutralizes both left gestures for every id "
+          "(empty-cell presses used to close) while EndDialog/right-click/Esc still pass through");
+    // round-8：展开态左键按下全部由仓库接管；未展开时不得吞原生按下。
+    Check(warehouseui::ConsumeExpandedLeftDown(true, true)
+              && !warehouseui::ConsumeExpandedLeftDown(true, false)
+              && !warehouseui::ConsumeExpandedLeftDown(false, true),
+          "expanded mode consumes every left-button down, collapsed mode does not");
+    // round-8：空槽没有原生命中项，点坐标→槽位必须与原生 8x8 网格一致。
+    {
+        const int originX = 18, originY = 50;
+        Check(warehouseui::GridSlotFromPoint(originX, originY, originX, originY,
+                  46, 8, 8, 64) == 0
+                  && warehouseui::GridSlotFromPoint(originX + 45, originY + 45, originX,
+                      originY, 46, 8, 8, 64) == 0
+                  && warehouseui::GridSlotFromPoint(originX + 46, originY, originX,
+                      originY, 46, 8, 8, 64) == 1
+                  && warehouseui::GridSlotFromPoint(originX, originY + 46, originX,
+                      originY, 46, 8, 8, 64) == 8
+                  && warehouseui::GridSlotFromPoint(originX + 7 * 46, originY + 7 * 46,
+                      originX, originY, 46, 8, 8, 64) == 63
+                  && warehouseui::GridSlotFromPoint(originX - 1, originY, originX,
+                      originY, 46, 8, 8, 64) == -1
+                  && warehouseui::GridSlotFromPoint(originX, originY - 1, originX,
+                      originY, 46, 8, 8, 64) == -1
+                  && warehouseui::GridSlotFromPoint(originX + 8 * 46, originY, originX,
+                      originY, 46, 8, 8, 64) == -1
+                  && warehouseui::GridSlotFromPoint(originX, originY + 8 * 46, originX,
+                      originY, 46, 8, 8, 64) == -1,
+              "backpack point maps onto the native 8x8 grid and rejects the outside");
+    }
+    // round-8：整理按钮纳入仓库控件集（按下同样只中和，动作只在 CLICK 执行）。
+    Check(warehouseui::IsWarehouseControlId(30052)
+              && warehouseui::ConsumeWarehouseDown(30052)
+              && !warehouseui::IsWarehouseControlId(30005),
+          "organize button id 30052 joins the warehouse control set");
 
     if (g_failures != 0) {
         std::fprintf(stderr, "warehouse UI flow: %d/%d checks failed\n",

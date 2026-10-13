@@ -65,9 +65,13 @@ inline bool IsNativeBackpackId(int id) noexcept {
     return (id >= 1000 && id < 1064) || (id >= 2000 && id < 2064);
 }
 inline bool SuppressPinnedClose(bool expanded, int command, int subtype, int id) noexcept {
-    if (!expanded || command != 0x200) return false;
-    if (subtype == 0xD) return true;
-    return subtype == 0xC && !IsNativeBackpackId(id);
+    if (!expanded) return false;
+    // round-8（2026-10-14 用户实测）：展开期间背包侧左键按下也必须中和，且不再按 id 放行。
+    // 旧实现只吞 0xD、并假定原生命中区 1000..1063 的 0xC 可以透传，实测点空格会关窗
+    // （原版按下状态机对空槽走上层关闭分支）。左键手势集合固定为 0xC/0xD，
+    // 其余（EndDialog 0xA、右键 0xE、Esc、滚轮 0x20A、网络/超时）一律透传。
+    (void)id;
+    return IsWarehouseLeftGesture(command, subtype);
 }
 
 inline constexpr HsodFingerprint_ kHsodFingerprints_[] = {

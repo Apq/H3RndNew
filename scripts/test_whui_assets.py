@@ -20,7 +20,13 @@ EXPECTED = {
        for direction in ('prev', 'next') for state in range(2)},
     'pager_n.pcx': (36, 22),
     'pager_s.pcx': (36, 22),
+    'tidy_n.pcx': (36, 22),
+    'tidy_s.pcx': (36, 22),
 }
+
+INK_NORMAL = (255, 231, 160)
+INK_HIGHLIGHT = (255, 248, 214)
+INK_SHADOW = (28, 18, 8)
 
 
 def decode_pcx(data, size):
@@ -59,7 +65,7 @@ def decode_pcx(data, size):
 
 class WarehouseAssetsTest(unittest.TestCase):
     def test_exact_manifest(self):
-        self.assertEqual(len(EXPECTED), 46)
+        self.assertEqual(len(EXPECTED), 48)
         self.assertEqual({p.name for p in ASSETS.glob('*.pcx')}, set(EXPECTED))
         for obsolete in ('title.pcx', 'tab12n.pcx', 'tab12s.pcx', 'tab13n.pcx', 'tab13s.pcx'):
             self.assertFalse((ASSETS / obsolete).exists())
@@ -77,36 +83,95 @@ class WarehouseAssetsTest(unittest.TestCase):
                   for key in ('open', 'close', 'take', 'put')]
         groups += [[f'tab{tab:02d}{state}.pcx' for state in ('n', 's')] for tab in range(12)]
         groups += [[f'arrow_{key}{state}.pcx' for state in range(2)] for key in ('prev', 'next')]
-        groups += [['pager_n.pcx', 'pager_s.pcx']]
+        groups += [['pager_n.pcx', 'pager_s.pcx'], ['tidy_n.pcx', 'tidy_s.pcx']]
         for names in groups:
             with self.subTest(group=names):
                 self.assertEqual(len({(ASSETS / name).read_bytes() for name in names}), len(names))
 
     def test_generator_categories(self):
-        tree = ast.parse((ROOT / 'scripts/make_whui_assets.py').read_text(encoding='utf-8-sig'))
-        tabs = next(ast.literal_eval(node.value) for node in tree.body
-                    if isinstance(node, ast.Assign) and any(
-                        isinstance(target, ast.Name) and target.id == 'TABS' for target in node.targets))
-        self.assertEqual(tabs, TABS)
-        pager_size = None
+        source = (ROOT / 'scripts/make_whui_assets.py').read_text(encoding='utf-8-sig')
+        tree = ast.parse(source)
+        literals = {}
         for node in tree.body:
             if not isinstance(node, ast.Assign):
                 continue
-            target_names = set()
             for target in node.targets:
+                names = []
                 if isinstance(target, ast.Name):
-                    target_names.add(target.id)
+                    names.append(target.id)
                 elif isinstance(target, ast.Tuple):
-                    target_names.update(elt.id for elt in target.elts
-                                        if isinstance(elt, ast.Name))
-            if {'PAGER_W', 'PAGER_H'} <= target_names:
-                pager_size = ast.literal_eval(node.value)
-        self.assertEqual(pager_size, (36, 22))
-        pager_fn = next(node for node in tree.body
-                        if isinstance(node, ast.FunctionDef) and node.name == 'make_pager')
-        called = {call.func.id for call in ast.walk(pager_fn)
-                  if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
-        self.assertNotIn('stamp_text', called)
+                    names.extend(elt.id for elt in target.elts if isinstance(elt, ast.Name))
+                for name in names:
+                    literals[name] = node.value
+        self.assertEqual(ast.literal_eval(literals['TABS']), TABS)
+        # 新增整理素材：中文烘焙的两字文案 + 与页码按钮一致的 36x22 尺寸。
+        self.assertEqual(ast.literal_eval(literals['TIDY_TEXT']), '整理')
+        self.assertEqual(ast.literal_eval(literals['PAGER_W']), (36, 22))
+        self.assertEqual(ast.literal_eval(literals['TIDY_W']), (36, 22))
+
+        def called_names(function_name):
+            function = next(node for node in tree.body
+                            if isinstance(node, ast.FunctionDef) and node.name == function_name)
+            return {call.func.id for call in ast.walk(function)
+                    if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)}
+
+        self.assertNotIn('stamp_text', called_names('make_pager'))
+        self.assertIn('stamp_text', called_names('make_tidy'))
+        for suffix in ('n', 's'):
+            self.assertIn(f'"tidy_%s.pcx" % suffix', source)
+        self.assertIn('make_tidy(selected)', source)
+
+    def test_tidy_assets_share_one_glyph_in_two_inks(self):
+        """两态必须同字形不同墨色：与同底板无文字的 pager 逐像素差分即文字覆盖区。"""
+        def load(name):
+            with Image.open(ASSETS / name) as raw:
+                return raw.convert('RGB')
+
+        normal, highlight = load('tidy_n.pcx'), load('tidy_s.pcx')
+        plate_n, plate_s = load('pager_n.pcx'), load('pager_s.pcx')
+        self.assertEqual(normal.size, (36, 22))
+        self.assertEqual(highlight.size, (36, 22))
+
+        def region(state, plate):
+            return frozenset((x, y) for y in range(state.height) for x in range(state.width)
+                             if state.getpixel((x, y)) != plate.getpixel((x, y)))
+
+        ink_n, ink_s = region(normal, plate_n), region(highlight, plate_s)
+        # 与同底板无文字素材一致 => 只有文字区被改动，底板完全复用。
+        self.assertLess(len(ink_n), 36 * 22 // 2)
+        self.assertLess(len(ink_s), 36 * 22 // 2)
+        self.assertGreaterEqual(len(ink_n), 250)
+        self.assertGreaterEqual(len(ink_s), 250)
+        # 同字形：两态文字覆盖区（含抗锯齿边缘）几乎逐像素一致。
+        self.assertLessEqual(len(ink_n ^ ink_s), 24,
+                             '两态文字覆盖区必须基本一致（同字形）')
+        left = min(point[0] for point in ink_n)
+        right = max(point[0] for point in ink_n)
+        top = min(point[1] for point in ink_n)
+        bottom = max(point[1] for point in ink_n)
+        self.assertGreaterEqual(left, 1)
+        self.assertLessEqual(right, 34)
+        self.assertGreaterEqual(top, 1)
+        self.assertLessEqual(bottom, 20)
+        self.assertGreaterEqual(right - left + 1, 24, '两个中文字符至少占 24 列')
+        self.assertGreaterEqual(bottom - top + 1, 10)
+        # 左右两半都有足量笔画 => 确实是两个字，不是单字或残留对勾。
+        middle = (left + right) // 2
+        for name, ink in (('tidy_n', ink_n), ('tidy_s', ink_s)):
+            self.assertGreaterEqual(sum(1 for point in ink if point[0] <= middle), 80,
+                                    f'{name} 左半字笔画不足')
+            self.assertGreaterEqual(sum(1 for point in ink if point[0] > middle), 80,
+                                    f'{name} 右半字笔画不足')
+
+        def mean_sum(state, points):
+            return sum(sum(state.getpixel(point)) for point in points) / len(points)
+
+        for name, state, plate, ink in (('tidy_n', normal, plate_n, ink_n),
+                                        ('tidy_s', highlight, plate_s, ink_s)):
+            self.assertGreater(mean_sum(state, ink), mean_sum(plate, ink),
+                               f'{name} 文字区应比底板更亮（浅黄墨色已烘焙）')
+        self.assertGreater(mean_sum(highlight, ink_s), mean_sum(normal, ink_n),
+                           '高亮态墨色整体应比普通态更亮')
 
     def test_preview_matches_every_asset(self):
         names = [f'btn_{key}{state}.pcx' for key in ('open', 'take', 'put', 'close')
@@ -114,6 +179,7 @@ class WarehouseAssetsTest(unittest.TestCase):
         names += [f'tab{tab:02d}{state}.pcx' for tab in range(12) for state in ('n', 's')]
         names += [f'arrow_{key}{state}.pcx' for key in ('prev', 'next') for state in range(2)]
         names += ['pager_n.pcx', 'pager_s.pcx']
+        names += ['tidy_n.pcx', 'tidy_s.pcx']
         with Image.open(ASSETS / 'preview.png') as preview:
             self.assertEqual(preview.size, (888, 1440))
             for index, name in enumerate(names):
@@ -139,18 +205,23 @@ class WarehouseAssetsTest(unittest.TestCase):
                         self.assertIn(f"'arrow_{direction}{state}.pcx'", text)
                 for suffix in ('n', 's'):
                     self.assertIn(f"'pager_{suffix}.pcx'", text)
-                self.assertRegex(text, r'\.Count -ne 46')
+                    self.assertIn(f"'tidy_{suffix}.pcx'", text)
+                self.assertRegex(text, r'\.Count -ne 48')
+                self.assertIn('期望48个指定PCX', text)
                 self.assertIn('Compare-Object $expectedAssets $assetNames', text)
                 gate = text.index('Compare-Object $expectedAssets $assetNames')
                 first_write = text.index('Copy-Item') if name == 'deploy.ps1' else text.index('$version = Get-PackVersion')
                 self.assertLess(gate, first_write)
 
-    def test_cpp_consumer_uses_46(self):
+    def test_cpp_consumer_uses_48(self):
         text = (ROOT / 'tests/warehouse_ui_pcx_test.cpp').read_text(encoding='utf-8')
         self.assertIn('tab < 12', text)
-        self.assertIn('names.size() == 46', text)
-        self.assertIn('nonEmpty == 46', text)
-        self.assertNotRegex(text, r'\b48\b')
+        self.assertIn('names.size() == 48', text)
+        self.assertIn('nonEmpty == 48', text)
+        self.assertIn('tidy_n.pcx', text)
+        self.assertIn('tidy_s.pcx', text)
+        self.assertIn('name.find("tidy_") == 0', text)
+        self.assertNotRegex(text, r'\b46\b')
         for dimensions in ('width = 24; height = 24;', 'width = 66; height = 32;',
                            'width = 44; height = 22;', 'width = 18; height = 22;',
                            'width = 36; height = 22;'):

@@ -45,11 +45,12 @@ $expectedAssets = @(
     }
     'arrow_prev0.pcx'; 'arrow_prev1.pcx'; 'arrow_next0.pcx'; 'arrow_next1.pcx'
     'pager_n.pcx'; 'pager_s.pcx'
+    'tidy_n.pcx'; 'tidy_s.pcx'
 )
 $uiAssets = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'whui') -Filter '*.pcx' -File)
 $assetNames = @($uiAssets | ForEach-Object { $_.Name })
-if ($uiAssets.Count -ne 46 -or @(Compare-Object $expectedAssets $assetNames).Count -ne 0) {
-    throw "仓库UI素材清单不匹配：期望46个指定PCX，实际$($uiAssets.Count)"
+if ($uiAssets.Count -ne 48 -or @(Compare-Object $expectedAssets $assetNames).Count -ne 0) {
+    throw "仓库UI素材清单不匹配：期望48个指定PCX，实际$($uiAssets.Count)"
 }
 foreach ($asset in $uiAssets) {
     $files += @{ Local = $asset.FullName; Entry = '热血插件/whui/' + $asset.Name }

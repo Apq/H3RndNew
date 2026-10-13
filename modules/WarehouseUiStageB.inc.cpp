@@ -47,7 +47,6 @@ struct WarehouseUiLive_ {
     warehouseui::Layout layout;
     std::size_t page = 0;
     warehouseui::Flow flow;
-    bool flowActive = false;
     H3DlgItem* openButton = nullptr;
     H3DlgItem* closeButton = nullptr;
     H3DlgItem* takeAllButton = nullptr;
@@ -64,6 +63,14 @@ struct WarehouseUiLive_ {
     H3DlgItem* originalNativeIcons[kWhUiSlotCount_] = {};
     bool nativeIconsReady = false;
     bool scrollDefEnabled = false;
+    // 背包网格命中项几何（纯整数，仅展开态参与点坐标→槽位定位）。
+    // 空槽没有原生命中项（native 只为有物品的格建 hit），此时靠 GridSlotFromPoint_
+    // 的常量回退，保证“点空格”也能识别为 backpack 区域而不落进关闭分支。
+    bool hitHas[kWhUiSlotCount_] = {};
+    int hitX[kWhUiSlotCount_] = {};
+    int hitY[kWhUiSlotCount_] = {};
+    int hitWidth[kWhUiSlotCount_] = {};
+    int hitHeight[kWhUiSlotCount_] = {};
 };
 
 static WarehouseUiLive_ g_wh_ui_live_;
@@ -107,6 +114,8 @@ static constexpr int kWhUiTakeAllId_ = 30201;
 static constexpr int kWhUiPutAllId_ = 30202;
 // 分页栏页码按钮（round-7）：30400..30403。
 static constexpr int kWhUiPagerBase_ = 30400;
+// 整理按钮（round-8）：分页条左侧预留按钮位，仅常规页显示，做存储层排序。
+static constexpr int kWhUiOrganizeId_ = 30052;
 // 布局偏移配置（round-7 用户裁定入配置文件 [WarehouseUI]，两层ini可覆盖）。
 struct WarehouseUiLayoutConfig_ {
     int openDX;    // 仓库按钮距背包界面左上角
@@ -118,32 +127,39 @@ struct WarehouseUiLayoutConfig_ {
     int bulkDY;      // 两个一键按钮距仓库顶部
 };
 static WarehouseUiLayoutConfig_ g_wh_ui_layout_cfg_ = { 8, 18, 0, 0, 8, 8, 50 };
-static int WarehouseUiClampOffset_(int value, int low, int high,
-                                   int fallback) noexcept {
-    return value >= low && value <= high ? value : fallback;
+// round-8：越界不再静默回退默认值（2026-10-14 用户实测 BulkButtonDY 被旧下限
+// 30 静默弃成默认 50），改为就近钳制并记录原始读数；用户给多少就尽量照做。
+static int WarehouseUiClampOffset_(int value, int low, int high) noexcept {
+    if (value < low) return low;
+    if (value > high) return high;
+    return value;
 }
 static void WarehouseUiLoadLayoutConfig_() noexcept {
     __try {
         const WarehouseUiLayoutConfig_ current = g_wh_ui_layout_cfg_;
         WarehouseUiLayoutConfig_ cfg = current;
-        cfg.openDX = WarehouseUiClampOffset_(
-            IniReadIntUtf8Layered("WarehouseUI", "OpenButtonDX", cfg.openDX), 0, 330, current.openDX);
-        cfg.openDY = WarehouseUiClampOffset_(
-            IniReadIntUtf8Layered("WarehouseUI", "OpenButtonDY", cfg.openDY), 0, 420, current.openDY);
-        cfg.closeDX = WarehouseUiClampOffset_(
-            IniReadIntUtf8Layered("WarehouseUI", "CloseButtonDX", cfg.closeDX), 0, 380, current.closeDX);
-        cfg.closeDY = WarehouseUiClampOffset_(
-            IniReadIntUtf8Layered("WarehouseUI", "CloseButtonDY", cfg.closeDY), 0, 440, current.closeDY);
-        cfg.bulkLeftDX = WarehouseUiClampOffset_(
-            IniReadIntUtf8Layered("WarehouseUI", "BulkButtonLeftDX", cfg.bulkLeftDX), 0, 330, current.bulkLeftDX);
-        cfg.bulkRightDX = WarehouseUiClampOffset_(
-            IniReadIntUtf8Layered("WarehouseUI", "BulkButtonRightDX", cfg.bulkRightDX), 0, 330, current.bulkRightDX);
-        cfg.bulkDY = WarehouseUiClampOffset_(
-            IniReadIntUtf8Layered("WarehouseUI", "BulkButtonDY", cfg.bulkDY), 30, 440, current.bulkDY);
+        WarehouseUiLayoutConfig_ raw = current;
+        raw.openDX = IniReadIntUtf8Layered("WarehouseUI", "OpenButtonDX", current.openDX);
+        raw.openDY = IniReadIntUtf8Layered("WarehouseUI", "OpenButtonDY", current.openDY);
+        raw.closeDX = IniReadIntUtf8Layered("WarehouseUI", "CloseButtonDX", current.closeDX);
+        raw.closeDY = IniReadIntUtf8Layered("WarehouseUI", "CloseButtonDY", current.closeDY);
+        raw.bulkLeftDX = IniReadIntUtf8Layered("WarehouseUI", "BulkButtonLeftDX", current.bulkLeftDX);
+        raw.bulkRightDX = IniReadIntUtf8Layered("WarehouseUI", "BulkButtonRightDX", current.bulkRightDX);
+        raw.bulkDY = IniReadIntUtf8Layered("WarehouseUI", "BulkButtonDY", current.bulkDY);
+        cfg.openDX = WarehouseUiClampOffset_(raw.openDX, 0, 330);
+        cfg.openDY = WarehouseUiClampOffset_(raw.openDY, 0, 420);
+        cfg.closeDX = WarehouseUiClampOffset_(raw.closeDX, 0, 380);
+        cfg.closeDY = WarehouseUiClampOffset_(raw.closeDY, 0, 440);
+        cfg.bulkLeftDX = WarehouseUiClampOffset_(raw.bulkLeftDX, 0, 330);
+        cfg.bulkRightDX = WarehouseUiClampOffset_(raw.bulkRightDX, 0, 330);
+        cfg.bulkDY = WarehouseUiClampOffset_(raw.bulkDY, 0, 440);
         g_wh_ui_layout_cfg_ = cfg;
         LogInfo("仓库UI: 布局配置 open=%d,%d close=%d,%d bulk=%d,%d,%d",
             cfg.openDX, cfg.openDY, cfg.closeDX, cfg.closeDY,
             cfg.bulkLeftDX, cfg.bulkRightDX, cfg.bulkDY);
+        LogInfo("仓库UI: 布局配置原始读数 open=%d,%d close=%d,%d bulk=%d,%d,%d",
+            raw.openDX, raw.openDY, raw.closeDX, raw.closeDY,
+            raw.bulkLeftDX, raw.bulkRightDX, raw.bulkDY);
     } __except (GuardCrashFilter_(GUARD_WH_UI_MODAL, GetExceptionInformation())) {
         // 读取失败保持现值（默认或上次成功值），不阻断接线。
     }
@@ -156,6 +172,8 @@ static void WarehouseUiSetExpanded_(H3BaseDlg* dlg, bool expanded, bool redraw) 
 static void WarehouseUiDetach_(H3BaseDlg* dlg) noexcept;
 static void WarehouseUiRefreshNativeIcons_(H3BaseDlg* dlg) noexcept;
 static void WarehouseUiSetNativeIconLayer_(H3BaseDlg* dlg, bool warehouseLayer) noexcept;
+// 刷新由“整理”按钮（round-8，定义在前）调用；同 TU 内 static 需前置声明（C3861）。
+static void WarehouseUiRefresh_(H3BaseDlg* dlg, bool redraw) noexcept;
 static int __stdcall WarehouseUiCallback_(void* self, H3Msg* msg);
 static void WarehouseUiCopyNative_(H3Hero* hero,
     warehouse::NativeBackpack& native) noexcept;
@@ -178,6 +196,39 @@ static void WarehouseUiRebuildFilter_(void) noexcept {
     } catch (...) {
         live.filtered.clear();
     }
+    // 相同道具连续（round-8 用户裁定）：只重排展示顺序，存储顺序与记录下标不变。
+    try {
+        warehouseui::SortRecordIndicesByIdentity(live.filtered, records);
+    } catch (...) {
+        // 排序失败保留未排序视图，不清空已有内容。
+    }
+}
+
+// 整理（round-8 用户裁定）：对仓库记录做**存储层**排序，相同道具连续；
+// 不只重排展示视图。排序是同一性重排，不新增/删除记录，因此不触碰原生背包；
+// epoch 递增让任何在途 Flow 失效。
+static void WarehouseUiOrganizeStorage_(H3BaseDlg* dlg) noexcept {
+    if (!g_wh_ui_live_.hero) return;
+    auto& records = g_warehouse_.heroes[
+        static_cast<std::size_t>(g_wh_ui_live_.hero->id)];
+    if (records.size() < 2) {
+        LogInfo("仓库UI: 整理跳过（记录不足2条） hero=%d size=%zu",
+            g_wh_ui_live_.hero->id, records.size());
+        return;
+    }
+    try {
+        warehouseui::SortRecordsByIdentity(records);
+    } catch (...) {
+        LogInfo("仓库UI: 整理失败（内存不足） hero=%d", g_wh_ui_live_.hero->id);
+        return;
+    }
+    if (g_warehouse_.mutationEpoch != (std::numeric_limits<std::uint64_t>::max)())
+        ++g_warehouse_.mutationEpoch;
+    LogInfo("仓库UI: 整理完成（存储层排序） hero=%d size=%zu epoch=%llu",
+        g_wh_ui_live_.hero->id, records.size(),
+        static_cast<unsigned long long>(g_warehouse_.mutationEpoch));
+    g_wh_ui_live_.page = 0;
+    WarehouseUiRefresh_(dlg, true);
 }
 
 // 背包侧：一键放入的可入仓掩码（round-7 用户裁定：批量操作固定为第一个
@@ -259,6 +310,9 @@ static void WarehouseUiRefresh_(H3BaseDlg* dlg, bool redraw) noexcept
     // 分页栏（round-7）：中间4个动态页码（当前页高亮），两侧箭头按可翻性换态。
     WarehouseUiRefreshPager_(dlg, g_wh_ui_live_.page, pages,
         g_wh_ui_live_.expanded);
+    // 整理按钮（round-8）：仅“常规”页且展开时可见（其余页签 HideDeactivate）。
+    WarehouseUiSetTidyVisible_(dlg, g_wh_ui_live_.expanded
+        && WarehouseUiActiveTab_() == warehouseui::kRegularTab);
     const std::size_t pagerBegin = WarehouseUiPagerBegin_();
     for (int i = 0; i < warehouseui::kPagerButtonCount; ++i) {
         H3DlgText* number = g_wh_ui_live_.pagerText[i];
@@ -340,6 +394,15 @@ static void WarehouseUiPrepareNativeIcons_(H3BaseDlg* dlg) noexcept
         if (!nativeHits[slot]) nativeHits[slot] = item;
     }
     for (int i = 0; i < kWhUiSlotCount_; ++i) {
+        if (nativeHits[i]) {
+            g_wh_ui_live_.hitHas[i] = true;
+            g_wh_ui_live_.hitX[i] = nativeHits[i]->GetX();
+            g_wh_ui_live_.hitY[i] = nativeHits[i]->GetY();
+            g_wh_ui_live_.hitWidth[i] = nativeHits[i]->GetWidth();
+            g_wh_ui_live_.hitHeight[i] = nativeHits[i]->GetHeight();
+        }
+    }
+    for (int i = 0; i < kWhUiSlotCount_; ++i) {
         const int col = i % static_cast<int>(warehouseui::kGridColumns);
         const int row = i / static_cast<int>(warehouseui::kGridColumns);
         // 命中项存在则用其实际坐标（+2,+1 与原生 DEF 图标一致）；
@@ -413,36 +476,66 @@ static void WarehouseUiSetNativeIconLayer_(H3BaseDlg* dlg, bool) noexcept
 static void WarehouseUiRefreshAfterMove_(H3BaseDlg* dlg) noexcept
 {
     if (!dlg || g_wh_ui_live_.dialog != dlg) return;
-    g_wh_ui_live_.flowActive = false;
     g_wh_ui_live_.flow = {};
     WarehouseUiRefreshNativeIcons_(dlg);
     WarehouseUiRefresh_(dlg, true);
 }
 
-// 落点无关的放入提交（round-7 用户裁定：移入仓库不必精确落点，只要在
-// 目标界面内点击且仓库有空位即自动追加；先选背包道具再点仓库任意处完成）。
-static void WarehouseUiCommitDeposit_(H3BaseDlg* dlg) noexcept
+// round-8：背包侧单击即事务性放入；不再要求先选中再点击仓库落点。
+// 空槽只消费左键、不产生事务，因此不会落入原生未知 ID 关闭分支。
+static void WarehouseUiDepositSlot_(H3BaseDlg* dlg, int slot) noexcept
 {
     if (!dlg || g_wh_ui_live_.dialog != dlg || !g_wh_ui_live_.hero
-        || !g_wh_ui_live_.flowActive)
+        || slot < 0 || slot >= static_cast<int>(warehouse::kBackpackCapacity))
         return;
     warehouse::NativeBackpack native;
     WarehouseUiCopyNative_(g_wh_ui_live_.hero, native);
-    int count = g_wh_ui_live_.hero->backpackCount;
+    const int count = g_wh_ui_live_.hero->backpackCount;
+    if (slot >= count || native[static_cast<std::size_t>(slot)].artifactId < 0)
+        return;
+    g_wh_ui_live_.flow = warehouseui::Flow(native, count,
+        g_wh_ui_live_.hero->id, g_wh_ui_live_.hero->owner,
+        g_warehouse_.mutationEpoch, g_wh_ui_live_.token);
+    if (!g_wh_ui_live_.flow.IsValid()) return;
+    g_wh_ui_live_.flow.Select(static_cast<std::size_t>(slot));
+    int updatedCount = count;
     const warehouseui::Result result = g_wh_ui_live_.flow.Deposit(
-        g_warehouse_, native, count, g_wh_ui_live_.hero->id,
+        g_warehouse_, native, updatedCount, g_wh_ui_live_.hero->id,
         g_wh_ui_live_.hero->owner, g_wh_ui_live_.token,
         g_wh_locked_ != 0, WarehouseUiHeld_());
     if (result == warehouseui::Result::Ok) {
-        WarehouseUiWriteNative_(g_wh_ui_live_.hero, native, count);
-        LogInfo("仓库UI: 放入成功(界面内任意落点) hero=%d slot=%d count=%d",
-            g_wh_ui_live_.hero->id,
-            static_cast<int>(g_wh_ui_live_.flow.SelectedIndex()), count);
+        WarehouseUiWriteNative_(g_wh_ui_live_.hero, native, updatedCount);
+        LogInfo("仓库UI: 单击放入成功 hero=%d slot=%d count=%d",
+            g_wh_ui_live_.hero->id, slot, updatedCount);
         WarehouseUiRefreshAfterMove_(dlg);
     } else {
-        LogInfo("仓库UI: 放入拒绝 result=%d hero=%d",
-            static_cast<int>(result), g_wh_ui_live_.hero->id);
+        LogInfo("仓库UI: 单击放入拒绝 result=%d hero=%d slot=%d",
+            static_cast<int>(result), g_wh_ui_live_.hero->id, slot);
     }
+}
+
+// 优先使用 attach 时读取的原生命中项几何；空槽没有命中项时回退原生8x8网格。
+static int WarehouseUiBackpackSlotAtPoint_(H3Msg* msg) noexcept
+{
+    if (!msg) return -1;
+    const int x = msg->GetX();
+    const int y = msg->GetY();
+    for (int i = 0; i < kWhUiSlotCount_; ++i) {
+        if (!g_wh_ui_live_.hitHas[i]) continue;
+        const int width = g_wh_ui_live_.hitWidth[i] > 0
+            ? g_wh_ui_live_.hitWidth[i] : warehouseui::kGridPitch + 1;
+        const int height = g_wh_ui_live_.hitHeight[i] > 0
+            ? g_wh_ui_live_.hitHeight[i] : warehouseui::kGridPitch + 1;
+        if (x >= g_wh_ui_live_.hitX[i] && x < g_wh_ui_live_.hitX[i] + width
+            && y >= g_wh_ui_live_.hitY[i] && y < g_wh_ui_live_.hitY[i] + height)
+            return i;
+    }
+    const int originX = g_wh_ui_live_.layout.backpack.x + warehouseui::kGridOriginDX;
+    const int originY = g_wh_ui_live_.layout.backpack.y
+        + warehouseui::kBackpackGridOriginDY;
+    return warehouseui::GridSlotFromPoint(x, y, originX, originY,
+        warehouseui::kGridPitch, static_cast<int>(warehouseui::kGridColumns),
+        static_cast<int>(warehouseui::kGridRows), kWhUiSlotCount_);
 }
 
 static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
@@ -471,51 +564,34 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
     if (!leftDown && !leftClick) return false;
     // DOWN只中和，不做事务；所有仓库动作只在 CLICK 运行一次。
     if (leftDown) {
-        // 展开态：覆盖层宝物图标（2000..2063）的按下由本模块接管；
-        // 原生槽命中区 1000..1063 的按下仍透传，保持原版按压/提示路径。
-        if (g_wh_ui_live_.expanded && id >= 2000 && id < 2064) return true;
+        // round-8：展开态下背包侧左键按下全部由仓库接管（含 1000..1063 原生命中项）。
+        // 透传会让原版按压/拖拽状态机与事务写回同时改同一份背包数组，且空格的
+        // 按下最终会落到原生未知回退关闭分支；这里不再区分 ID 与控件归属。
+        if (warehouseui::ConsumeExpandedLeftDown(g_wh_ui_live_.expanded, leftDown))
+            return true;
         return warehouseui::ConsumeWarehouseDown(id);
     }
     // item状态机已在callback之前处理按下；只中和callback的未知ID关闭分支。
     // 按钮及页签动作只在释放CLICK执行一次。
     if (!g_wh_ui_live_.expanded && id != kWhUiOpenId_) return false;
     if (!warehouseui::ExecutesWarehouseAction(static_cast<int>(msg->subtype))) return true;
+    // 背包侧单击即事务性放入（round-8 用户裁定）：有物品的槽直接移入，空槽只消费
+    // 左键不动数据。ID 不可靠（空槽无原生命中项、覆盖层与原件同 ID 区间）时再用
+    // 点坐标在 8x8 网格上定位，保证“点背包里的装备就进仓库”与 ID 无关。
     if (id >= 1000 && id < 1064) {
-        warehouse::NativeBackpack native;
-        WarehouseUiCopyNative_(g_wh_ui_live_.hero, native);
-        const int count = g_wh_ui_live_.hero->backpackCount;
-        g_wh_ui_live_.flow = warehouseui::Flow(native, count, heroId, ownerId,
-            g_warehouse_.mutationEpoch, g_wh_ui_live_.token);
-        if (!g_wh_ui_live_.flow.IsValid()) return true;
-        g_wh_ui_live_.flow.Select(static_cast<std::size_t>(id - 1000));
-        g_wh_ui_live_.flowActive = true;
-        LogInfo("仓库UI: 已选择原生背包槽=%d hero=%d token=%llu",
-            id - 1000, heroId,
-            static_cast<unsigned long long>(g_wh_ui_live_.token));
+        WarehouseUiDepositSlot_(dlg, id - 1000);
         return true;
     }
     if (id >= 2000 && id < 2064) {
-        // 展开态下宝物图标（原生 DEF id=2000..2063，覆盖层同 ID）就是背包侧
-        // 选择来源；不中和就会落到原生“未知 ID”关闭分支。
-        const int slot = id - 2000;
-        warehouse::NativeBackpack native;
-        WarehouseUiCopyNative_(g_wh_ui_live_.hero, native);
-        g_wh_ui_live_.flow = warehouseui::Flow(native,
-            g_wh_ui_live_.hero->backpackCount, heroId, ownerId,
-            g_warehouse_.mutationEpoch, g_wh_ui_live_.token);
-        if (g_wh_ui_live_.flow.IsValid()) {
-            g_wh_ui_live_.flow.Select(static_cast<std::size_t>(slot));
-            g_wh_ui_live_.flowActive = true;
-            LogInfo("仓库UI: 已从宝物图标选择背包槽=%d hero=%d", slot, heroId);
-        }
+        WarehouseUiDepositSlot_(dlg, id - 2000);
         return true;
     }
-    // 放入落点无关（round-7）：选中背包道具后，点仓库面板任意背景
-    // （底板/边框/标题）同样提交放入；页签与按钮保持各自语义。
-    if (g_wh_ui_live_.flowActive
-        && (id == kWhUiPanelBackId_ || id == kWhUiBackdropId_
-            || id == kWhUiFrameId_ || id == kWhUiTitleId_)) {
-        WarehouseUiCommitDeposit_(dlg);
+    const int pointSlot = WarehouseUiBackpackSlotAtPoint_(msg);
+    const bool insideBackpack = pointSlot >= 0
+        || warehouseui::PointInRect(msg->GetX(), msg->GetY(),
+            g_wh_ui_live_.layout.backpack);
+    if (insideBackpack) {
+        WarehouseUiDepositSlot_(dlg, pointSlot);
         return true;
     }
     if (id >= kWhUiSlotBase_ && id < kWhUiSlotBase_ + kWhUiSlotCount_) {
@@ -526,10 +602,6 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
         warehouse::NativeBackpack native;
         WarehouseUiCopyNative_(g_wh_ui_live_.hero, native);
         int count = g_wh_ui_live_.hero->backpackCount;
-        if (g_wh_ui_live_.flowActive) {
-            WarehouseUiCommitDeposit_(dlg);
-            return true;
-        }
         if (at >= view.begin + view.count || at >= g_wh_ui_live_.filtered.size())
             return true;
         const std::size_t recordIndex = g_wh_ui_live_.filtered[at];
@@ -578,6 +650,14 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
         WarehouseUiSetExpanded_(dlg, true, true);
         return true;
     }
+    // 整理按钮（round-8）：只在可见（常规页 + 展开态）时响应；不可见状态下的
+    // 同名点击一律忽略，避免快捷键式误触发。
+    if (id == kWhUiOrganizeId_) {
+        if (g_wh_ui_live_.expanded
+            && WarehouseUiActiveTab_() == warehouseui::kRegularTab)
+            WarehouseUiOrganizeStorage_(dlg);
+        return true;
+    }
     if (id == kWhUiCloseId_) {
         WarehouseUiSetExpanded_(dlg, false, true);
         return true;
@@ -586,7 +666,6 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
     const int tabCommand = WarehouseUiTabCommand_(id);
     if (tabCommand >= 0) {
         if (tabCommand == 1) g_wh_ui_live_.page = 0;
-        g_wh_ui_live_.flowActive = false;
         WarehouseUiRefresh_(dlg, true);
         return true;
     }
@@ -620,7 +699,6 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
                 heroId, ownerId, g_wh_ui_live_.token, g_wh_locked_ != 0,
                 WarehouseUiHeld_(), include, moved);
         }
-        g_wh_ui_live_.flowActive = false;
         LogInfo("仓库UI: 批量操作 id=%d tab=%d result=%d moved=%u hero=%d",
             id, WarehouseUiActiveTab_(), static_cast<int>(result),
             static_cast<unsigned>(moved), heroId);
@@ -703,8 +781,7 @@ static void WarehouseUiSetExpanded_(H3BaseDlg* dlg, bool expanded,
         for (std::size_t i = g_wh_ui_live_.panelItemCount; i > 0; --i)
             g_wh_ui_live_.panelItems[i - 1]->HideDeactivate();
         g_wh_ui_live_.expanded = false;
-        g_wh_ui_live_.flowActive = false;
-        WarehouseUiRestoreSaveUnder_();
+            WarehouseUiRestoreSaveUnder_();
         if (redraw) dlg->Redraw();
         LogInfo("仓库UI: 已关闭仓库层，背包恢复原生交互");
         return;
@@ -952,6 +1029,15 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
         const WarehouseTabPair_ pair = WarehouseUiCreateFooterArrow_(i,
             layout.warehouse.x + (i == 0 ? 8 : layout.warehouse.width - 26),
             footerY, i == 0 ? kWhUiPrevId_ : kWhUiNextId_);
+        WarehouseUiAddPanelItem_(dlg, pair.label);
+        WarehouseUiAddPanelItem_(dlg, pair.hit);
+    }
+    // 整理按钮（round-8 用户裁定）：分页条左侧预留的按钮位，仅“常规”页显示，
+    // 点击对仓库记录做**存储层**排序（不是只重排展示）。位置与其他按钮层级一致，
+    // 由 Refresh_ 按当前页签与展开态决定可见性。
+    {
+        const WarehouseTabPair_ pair = WarehouseUiCreateTidy_(
+            layout.warehouse.x + 8, footerY, kWhUiOrganizeId_);
         WarehouseUiAddPanelItem_(dlg, pair.label);
         WarehouseUiAddPanelItem_(dlg, pair.hit);
     }

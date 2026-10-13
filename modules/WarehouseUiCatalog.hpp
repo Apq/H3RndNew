@@ -50,6 +50,13 @@ inline constexpr int kSlotMax = 18;
 
 inline constexpr int kRegularTab = 0;
 
+// H3ArtifactSetup::position 在当前 HD_SOD 运行时表中以 1 为首个装备槽，
+// 0 表示无装备位置；先归一化为本文件使用的 0-based eArtifactSlots。
+inline int NormalizeArtifactTableSlot(int rawSlot) noexcept {
+    if (rawSlot <= 0) return kSlotNone;
+    return rawSlot <= kSlotMax + 1 ? rawSlot - 1 : rawSlot;
+}
+
 // 穿戴位置 → 位置页签；超出原版范围（模组）仍归入“装备”。
 inline TabKind SlotTab(int slot) noexcept {
     switch (slot) {
