@@ -14,6 +14,7 @@ static constexpr UINT32 kWhUiModalSiteRva_ = 0x039E66;
 static constexpr UINT32 kWhUiModalEndRva_ = 0x039E80;
 static constexpr int kWhUiBackdropId_ = 30000;
 static constexpr int kWhUiFrameId_ = 30003;
+static constexpr int kWhUiPanelBackId_ = 30004;
 static constexpr int kWhUiTitleId_ = 30001;
 static constexpr int kWhUiCountId_ = 30002;
 static constexpr int kWhUiPrevId_ = 30050;
@@ -287,15 +288,18 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
     g_wh_ui_live_.flow = warehouseui::Flow(native, count, hero->id, hero->owner,
         g_warehouse_.mutationEpoch, token);
 
-    // 背景：优先与完整背包相同的 BkPack.pcx（369x369 @ 网格原点）；
-    // 加载失败时退回纯色框，保证面板仍可用。
-    H3DlgPcx* backdrop = H3DlgPcx::Create(
-        layout.warehouse.x + warehouseui::kGridOriginDX,
-        layout.warehouse.y + warehouseui::kGridOriginDY,
-        kWhUiBackdropId_, kWhUiBackdropPcx_);
-    const bool backdropOk = backdrop && backdrop->GetPcx() != nullptr;
-    if (backdropOk) {
-        WarehouseUiAdd_(dlg, 0, 0, backdrop);
+    // 面板整块底板（原版对话框同款）：DIBOXBACK 256x256 平铺 + DLGBOX 玩家色边框，
+    // 盖住面板全区域，标题/Tab 预留/底部不再露出底下的画面；失败退纯色框。
+    H3DlgPcx16* panelBack = H3DlgPcx16::Create(layout.warehouse.x,
+        layout.warehouse.y, warehouseui::kPanelWidth, warehouseui::kPanelHeight,
+        kWhUiPanelBackId_, NH3Dlg::Assets::DIBOXBACK);
+    const bool panelBackOk = panelBack && panelBack->GetPcx() != nullptr;
+    if (panelBackOk) {
+        panelBack->GetPcx()->BackgroundRegion(0, 0, warehouseui::kPanelWidth,
+            warehouseui::kPanelHeight, FALSE);
+        panelBack->GetPcx()->FrameRegion(0, 0, warehouseui::kPanelWidth,
+            warehouseui::kPanelHeight, FALSE, hero->owner, FALSE);
+        WarehouseUiAdd_(dlg, 0, 0, panelBack);
     } else {
         H3DlgFrame* frame = H3DlgFrame::Create(layout.warehouse.x,
             layout.warehouse.y, layout.warehouse.width, layout.warehouse.height,
@@ -305,6 +309,15 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
         } else {
             WarehouseUiAdd_(dlg, 0, 0, frame);
         }
+    }
+    // 格子背景：与完整背包相同的 BkPack.pcx（369x369 @ 网格原点），叠在底板上。
+    H3DlgPcx* backdrop = H3DlgPcx::Create(
+        layout.warehouse.x + warehouseui::kGridOriginDX,
+        layout.warehouse.y + warehouseui::kGridOriginDY,
+        kWhUiBackdropId_, kWhUiBackdropPcx_);
+    const bool backdropOk = backdrop && backdrop->GetPcx() != nullptr;
+    if (backdropOk) {
+        WarehouseUiAdd_(dlg, 0, 0, backdrop);
     }
     // 标题条与 HD 完整背包同构：405x30 @ (0,18)，bigfont.fnt。
     g_wh_ui_live_.title = H3DlgText::Create(layout.warehouse.x,
