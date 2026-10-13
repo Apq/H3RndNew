@@ -46,6 +46,8 @@ static WarehouseUiLive_ g_wh_ui_live_;
 static LoHook* g_wh_ui_modal_hook_ = nullptr;
 static LoHook* g_wh_ui_modal_end_hook_ = nullptr;
 static bool g_wh_ui_installed_ = false;
+// HD_SOD+0x6620：完整背包外框阴影函数（stdcall x,y,w,h ret 0x10），Install 时缓存。
+static UINT32 g_wh_ui_shadow_ = 0;
 
 static int __stdcall WarehouseUiCallback_(void* self, H3Msg* msg);
 
@@ -252,14 +254,22 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
     WarehouseUiNativeAnchor_(dlg, anchorX, anchorY);
     // 锚点是原生网格第一格 (ID 1000) 的左上角；完整背包 405x459 视觉区
     // 原点相对网格原点偏移 (-18, -50)（反汇编实测）。
-    const int originX = anchorX - warehouseui::kGridOriginDX;
-    const int originY = anchorY - warehouseui::kGridOriginDY;
+    const int originX = anchorX - 18;
+    const int originY = anchorY - 50;
     const warehouseui::Layout layout = warehouseui::MakeLayout(
         dlg->GetWidth(), dlg->GetHeight(), originX, originY);
     if (!layout.fits || !warehouse::IsValidHeroId(hero->id)) {
         LogInfo("仓库UI: 屏幕/背包布局不满足，当前弹窗只保留原生UI");
         return;
     }
+
+    // 与完整背包同款的外框阴影（HD_SOD 0x01006620，右/底各两条暗化条）。
+    // 该函数 stdcall(x,y,w,h) ret 0x10，构造函数自己也在 ShowAndRun 前调用，
+    // 全局绘制对象此刻必已就绪；本函数整体运行在 modal 钩子的 CrashGuard __try 内。
+    if (g_wh_ui_shadow_ != 0)
+        reinterpret_cast<void (__stdcall *)(int, int, int, int)>(
+            g_wh_ui_shadow_)(layout.warehouse.x, layout.warehouse.y,
+            warehouseui::kPanelWidth, warehouseui::kPanelHeight);
 
     warehouse::NativeBackpack native;
     WarehouseUiCopyNative_(hero, native);
@@ -323,9 +333,10 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
         WarehouseUiAdd_(dlg, 0, 0, slot);
     }
     // 底部条（网格下方 405x40 区域）：计数与翻页。
-    const int footerY = layout.warehouse.y + layout.warehouse.height - 34;
+    // 分页行：BkPack 背景底(451)与底边距之间（kPagerRowY=459，高 32）。
+    const int footerY = layout.warehouse.y + warehouseui::kPagerRowY;
     g_wh_ui_live_.count = H3DlgText::Create(layout.warehouse.x + 64,
-        footerY, layout.warehouse.width - 128, 24,
+        footerY, layout.warehouse.width - 128, warehouseui::kPagerRowHeight,
         "0/64", NH3Dlg::Text::SMALL, eTextColor::REGULAR, kWhUiCountId_,
         eTextAlignment::MIDDLE_CENTER, 0);
     if (WarehouseUiOwns_(dlg, g_wh_ui_live_.count)) {
@@ -334,18 +345,19 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
         WarehouseUiAdd_(dlg, 0, 0, g_wh_ui_live_.count);
     }
     H3DlgText* prev = H3DlgText::Create(layout.warehouse.x + 8,
-        footerY, 52, 24, "<", NH3Dlg::Text::SMALL,
+        footerY, 52, warehouseui::kPagerRowHeight, "<", NH3Dlg::Text::SMALL,
         eTextColor::REGULAR, kWhUiPrevId_, eTextAlignment::MIDDLE_CENTER, 0);
     H3DlgText* next = H3DlgText::Create(layout.warehouse.x + layout.warehouse.width - 60,
-        footerY, 52, 24, ">", NH3Dlg::Text::SMALL,
+        footerY, 52, warehouseui::kPagerRowHeight, ">", NH3Dlg::Text::SMALL,
         eTextColor::REGULAR, kWhUiNextId_, eTextAlignment::MIDDLE_CENTER, 0);
     WarehouseUiAdd_(dlg, 0, 0, prev);
     WarehouseUiAdd_(dlg, 0, 0, next);
     H3DlgTransparentItem* prevHit = H3DlgTransparentItem::Create(
-        layout.warehouse.x + 8, footerY, 52, 24, kWhUiPrevId_);
+        layout.warehouse.x + 8, footerY, 52, warehouseui::kPagerRowHeight,
+        kWhUiPrevId_);
     H3DlgTransparentItem* nextHit = H3DlgTransparentItem::Create(
         layout.warehouse.x + layout.warehouse.width - 60,
-        footerY, 52, 24, kWhUiNextId_);
+        footerY, 52, warehouseui::kPagerRowHeight, kWhUiNextId_);
     WarehouseUiAdd_(dlg, 0, 0, prevHit);
     WarehouseUiAdd_(dlg, 0, 0, nextHit);
 
@@ -414,6 +426,7 @@ void InstallWarehouseUiStageB_()
     HMODULE module = GetModuleHandleW(L"HD_SOD.dll");
     if (!module) return;
     const UINT32 base = reinterpret_cast<UINT32>(module);
+    g_wh_ui_shadow_ = base + 0x6620; // 完整背包外框阴影（与 0x039A00 构造同一函数）
     g_wh_ui_modal_hook_ = _PI->WriteLoHook(base + kWhUiModalSiteRva_,
         &OnWarehouseUiModal_);
     g_wh_ui_modal_end_hook_ = _PI->WriteLoHook(base + kWhUiModalEndRva_,

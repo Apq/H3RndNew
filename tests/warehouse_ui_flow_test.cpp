@@ -51,10 +51,10 @@ bool SameState(const State& left, const State& right) {
 void CheckLayoutAndPaging() {
     // 面板与完整背包同尺寸 405x459：并排最小宽 = 8+405+8+405+8 = 834。
     for (int width : {834, 1024, 1920}) {
-        const auto layout = warehouseui::MakeLayout(width, 480, 8, -20);
+        const auto layout = warehouseui::MakeLayout(width, 600, 8, -20);
         Check(layout.fits, "834/1024/1920 layout fits");
-        Check(layout.backpack.height == 459 && layout.warehouse.height == 459,
-              "backpack and warehouse heights are 459");
+        Check(layout.backpack.height == 459 && layout.warehouse.height == 523,
+              "backpack 459 tall; warehouse panel adds tab+pager rows (523)");
         Check(layout.warehouse.width == 405,
               "warehouse panel is exactly the backpack-sized 405 wide");
         Check(layout.backpack.y == 0, "negative y clamps to zero");
@@ -66,31 +66,31 @@ void CheckLayoutAndPaging() {
         Check(layout.columns == 8 && layout.page_size == 64,
               "panel mirrors the native 8x8 grid page");
     }
-    Check(!warehouseui::MakeLayout(833, 480, 8, 0).fits,
+    Check(!warehouseui::MakeLayout(833, 600, 8, 0).fits,
           "width below 834 fails closed");
 
-    const auto right = warehouseui::MakeLayout(1024, 480, 8, 999);
+    const auto right = warehouseui::MakeLayout(1024, 600, 8, 999);
     Check(right.fits && right.side == LayoutSide::Right
-              && right.backpack.y == 21,
+              && right.backpack.y == 77,
           "right layout and positive y clamp");
 
-    const auto left = warehouseui::MakeLayout(1024, 480, 500, 20);
+    const auto left = warehouseui::MakeLayout(1024, 600, 500, 20);
     Check(left.fits && left.side == LayoutSide::Left,
           "left fallback is preferred when right is too narrow");
     Check(left.warehouse.Right() + 8 <= left.backpack.x,
           "left panel keeps eight pixel gap");
 
-    const auto moved = warehouseui::MakeLayout(900, 480, 500, 500);
+    const auto moved = warehouseui::MakeLayout(900, 600, 500, 500);
     Check(moved.fits && moved.backpack.x == 8
               && moved.side == LayoutSide::Right,
           "narrow fallback moves backpack to x=8 and uses right panel");
-    const auto squeezed = warehouseui::MakeLayout(900, 480, 400, 0);
+    const auto squeezed = warehouseui::MakeLayout(900, 600, 400, 0);
     Check(squeezed.fits && squeezed.backpack.x == 8
               && squeezed.side == LayoutSide::Right,
           "centered backpack with no side room falls back to left-edge pair");
-    Check(!warehouseui::MakeLayout(1024, 458, 8, 0).fits,
-          "height below 459 fails closed");
-    Check(warehouseui::MakeLayout(900, 480, -100, 0).fits,
+    Check(!warehouseui::MakeLayout(1024, 522, 8, 0).fits,
+          "height below 523 fails closed");
+    Check(warehouseui::MakeLayout(900, 600, -100, 0).fits,
           "off-screen preferred position uses safe fallback");
 
     const std::size_t maximum = (std::numeric_limits<std::size_t>::max)();

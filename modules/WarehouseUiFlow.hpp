@@ -52,23 +52,31 @@ struct Layout {
 
 inline constexpr int kBackpackWidth = 405;    // HD 完整背包视觉区（0x01006620 实测）
 inline constexpr int kBackpackHeight = 459;
-inline constexpr int kPanelWidth = 405;       // 仓库面板与完整背包同尺寸（用户裁定）
-inline constexpr int kPanelHeight = 459;
+inline constexpr int kPanelWidth = 405;       // 仓库面板宽与完整背包一致（用户裁定）
+// 面板高 = 完整背包 459 + Tab 行 32 + 分页行 32 = 523（用户裁定：抄整个扩展界面，
+// 顶部预留 Tab 页、网格下多一个分页行）。
+inline constexpr int kTabRowHeight = 32;      // Tab 行预留（本版不画控件）
+inline constexpr int kPagerRowHeight = 32;    // 分页行（< > 与计数）
+inline constexpr int kPanelHeight = 459 + kTabRowHeight + kPagerRowHeight; // 523
 inline constexpr int kPanelGap = 8;
 inline constexpr int kScreenMargin = 8;
 // HD 完整背包内部几何（反汇编 0x039A00 构造实测，仓库面板同构复用）：
 // 标题 405x30 @ (0,18)；BkPack.pcx 369x369 @ (18,50)；
 // 8x8 网格 hit 47x47 步距 46 @ (18+col*46, 50+row*46)；
-// DEF 图标 44x44 @ (20+col*46, 51+row*46)。
+// DEF 图标 44x44 @ (20+col*46, 51+row*46)；底部状态条 389x18 @ (8,441)。
+// 仓库面板把网格整体下移 kTabRowHeight：网格原点 (18, 82)。
 inline constexpr int kTitleHeight = 30;
 inline constexpr int kTitleOffsetY = 18;
 inline constexpr int kGridOriginDX = 18;
-inline constexpr int kGridOriginDY = 50;
+inline constexpr int kGridOriginDY = 50 + kTabRowHeight; // 82
 inline constexpr int kGridPitch = 46;
 inline constexpr int kGridHitSize = 47;
 inline constexpr int kGridDefSize = 44;
 inline constexpr int kGridDefDX = 2;
 inline constexpr int kGridDefDY = 1;
+// 分页行：背景底(82+369=451)与状态条之间；状态条沿用扩展底位 441+32=473。
+inline constexpr int kPagerRowY = kGridOriginDY + 369 + 8; // 459：分页行顶
+inline constexpr int kStatusTextY = kPanelHeight - 18;    // 505：底部状态条（预留）
 inline constexpr std::size_t kGridColumns = 8;
 inline constexpr std::size_t kPageRows = 8;
 inline constexpr std::size_t kPageSize = kGridColumns * kPageRows; // 64，与扩展同构
@@ -76,7 +84,7 @@ inline constexpr int kMaxArtifactId = 143;
 inline constexpr int kScrollArtifactId = 1;
 inline constexpr int kMaxScrollSubtype = 69;
 inline constexpr int kMinScreenWidth = kScreenMargin + kBackpackWidth
-    + kPanelGap + kPanelWidth + kScreenMargin; // 834：并排放下两个 405x459
+    + kPanelGap + kPanelWidth + kScreenMargin; // 834：背包 405 与面板 405 并排
 inline constexpr int kMinScreenHeight = kPanelHeight;
 
 inline int ClampPanelY(int requestedY, int screenHeight) noexcept {
