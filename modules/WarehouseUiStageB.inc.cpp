@@ -12,14 +12,19 @@ static const int GUARD_WH_UI_CALLBACK = GuardRegisterHook_("WarehouseUiCallback"
 
 static constexpr UINT32 kWhUiModalSiteRva_ = 0x039E66;
 static constexpr UINT32 kWhUiModalEndRva_ = 0x039E80;
-static constexpr int kWhUiFrameId_ = 30000;
+static constexpr int kWhUiBackdropId_ = 30000;
+static constexpr int kWhUiFrameId_ = 30003;
 static constexpr int kWhUiTitleId_ = 30001;
 static constexpr int kWhUiCountId_ = 30002;
 static constexpr int kWhUiPrevId_ = 30050;
 static constexpr int kWhUiNextId_ = 30051;
 static constexpr int kWhUiSlotBase_ = 30100;
-static constexpr int kWhUiSlotCount_ = 24;
+// 64 槽 = 8x8，与 HD 完整背包网格同构（kPageSize 亦为 64）。
+static constexpr int kWhUiSlotCount_ = 64;
 static constexpr int kWhUiFrameColor_ = 0x7BEF;
+// HD_SOD 0x039C03 实测引用的是 "BkPack.pcx"（不是 H3API HDassets 注释里的 .bmp）。
+static constexpr const char* kWhUiBackdropPcx_ = "BkPack.pcx";
+static constexpr const char* kWhUiTitleFont_ = "bigfont.fnt";
 
 using WarehouseCallback_ = int (__stdcall *)(void*, H3Msg*);
 
@@ -245,8 +250,12 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
     int anchorX = backpackX;
     int anchorY = backpackY;
     WarehouseUiNativeAnchor_(dlg, anchorX, anchorY);
+    // 锚点是原生网格第一格 (ID 1000) 的左上角；完整背包 405x459 视觉区
+    // 原点相对网格原点偏移 (-18, -50)（反汇编实测）。
+    const int originX = anchorX - warehouseui::kGridOriginDX;
+    const int originY = anchorY - warehouseui::kGridOriginDY;
     const warehouseui::Layout layout = warehouseui::MakeLayout(
-        dlg->GetWidth(), dlg->GetHeight(), anchorX, anchorY);
+        dlg->GetWidth(), dlg->GetHeight(), originX, originY);
     if (!layout.fits || !warehouse::IsValidHeroId(hero->id)) {
         LogInfo("仓库UI: 屏幕/背包布局不满足，当前弹窗只保留原生UI");
         return;
@@ -268,26 +277,55 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
     g_wh_ui_live_.flow = warehouseui::Flow(native, count, hero->id, hero->owner,
         g_warehouse_.mutationEpoch, token);
 
-    H3DlgFrame* frame = H3DlgFrame::Create(layout.warehouse.x,
-        layout.warehouse.y, layout.warehouse.width, layout.warehouse.height,
-        kWhUiFrameId_, static_cast<RGB565>(kWhUiFrameColor_));
-    if (WarehouseUiOwns_(dlg, frame)) {
-        static_cast<H3DlgItem*>(frame)->ShowActivate();
+    // 背景：优先与完整背包相同的 BkPack.pcx（369x369 @ 网格原点）；
+    // 加载失败时退回纯色框，保证面板仍可用。
+    H3DlgPcx* backdrop = H3DlgPcx::Create(
+        layout.warehouse.x + warehouseui::kGridOriginDX,
+        layout.warehouse.y + warehouseui::kGridOriginDY,
+        kWhUiBackdropId_, kWhUiBackdropPcx_);
+    const bool backdropOk = backdrop && backdrop->GetPcx() != nullptr;
+    if (backdropOk) {
+        WarehouseUiAdd_(dlg, 0, 0, backdrop);
     } else {
-        WarehouseUiAdd_(dlg, 0, 0, frame);
+        H3DlgFrame* frame = H3DlgFrame::Create(layout.warehouse.x,
+            layout.warehouse.y, layout.warehouse.width, layout.warehouse.height,
+            kWhUiFrameId_, static_cast<RGB565>(kWhUiFrameColor_));
+        if (WarehouseUiOwns_(dlg, frame)) {
+            static_cast<H3DlgItem*>(frame)->ShowActivate();
+        } else {
+            WarehouseUiAdd_(dlg, 0, 0, frame);
+        }
     }
-    g_wh_ui_live_.title = H3DlgText::Create(layout.warehouse.x + 8,
-        layout.warehouse.y + 6, layout.warehouse.width - 16, SmallFontHeight_(),
-        "Warehouse", NH3Dlg::Text::SMALL, eTextColor::REGULAR, kWhUiTitleId_,
+    // 标题条与 HD 完整背包同构：405x30 @ (0,18)，bigfont.fnt。
+    g_wh_ui_live_.title = H3DlgText::Create(layout.warehouse.x,
+        layout.warehouse.y + warehouseui::kTitleOffsetY,
+        warehouseui::kPanelWidth, warehouseui::kTitleHeight,
+        "Warehouse", kWhUiTitleFont_, eTextColor::REGULAR, kWhUiTitleId_,
         eTextAlignment::MIDDLE_CENTER, 0);
     if (WarehouseUiOwns_(dlg, g_wh_ui_live_.title)) {
         static_cast<H3DlgItem*>(g_wh_ui_live_.title)->ShowActivate();
     } else {
         WarehouseUiAdd_(dlg, 0, 0, g_wh_ui_live_.title);
     }
-    g_wh_ui_live_.count = H3DlgText::Create(layout.warehouse.x + 8,
-        layout.warehouse.y + 8 + SmallFontHeight_(),
-        layout.warehouse.width - 16, SmallFontHeight_(),
+    // 64 槽 = 8x8 网格，DEF 图标 44x44 与 HD 完整背包同构
+    // （步距 46，格内偏移 +2,+1）。
+    const int gridX = layout.warehouse.x + warehouseui::kGridOriginDX;
+    const int gridY = layout.warehouse.y + warehouseui::kGridOriginDY;
+    for (int i = 0; i < kWhUiSlotCount_; ++i) {
+        const int col = i % static_cast<int>(warehouseui::kGridColumns);
+        const int row = i / static_cast<int>(warehouseui::kGridColumns);
+        H3DlgDef* slot = H3DlgDef::Create(
+            gridX + col * warehouseui::kGridPitch + warehouseui::kGridDefDX,
+            gridY + row * warehouseui::kGridPitch + warehouseui::kGridDefDY,
+            warehouseui::kGridDefSize, warehouseui::kGridDefSize,
+            kWhUiSlotBase_ + i, NH3Dlg::Assets::ARTIFACT_DEF, 0, 0, FALSE, FALSE);
+        g_wh_ui_live_.slots[i] = slot;
+        WarehouseUiAdd_(dlg, 0, 0, slot);
+    }
+    // 底部条（网格下方 405x40 区域）：计数与翻页。
+    const int footerY = layout.warehouse.y + layout.warehouse.height - 34;
+    g_wh_ui_live_.count = H3DlgText::Create(layout.warehouse.x + 64,
+        footerY, layout.warehouse.width - 128, 24,
         "0/64", NH3Dlg::Text::SMALL, eTextColor::REGULAR, kWhUiCountId_,
         eTextAlignment::MIDDLE_CENTER, 0);
     if (WarehouseUiOwns_(dlg, g_wh_ui_live_.count)) {
@@ -295,30 +333,19 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
     } else {
         WarehouseUiAdd_(dlg, 0, 0, g_wh_ui_live_.count);
     }
-    const int gridTop = layout.warehouse.y + 14 + 2 * SmallFontHeight_();
-    for (int i = 0; i < kWhUiSlotCount_; ++i) {
-        const int col = i % 3;
-        const int row = i / 3;
-        H3DlgDef* slot = H3DlgDef::Create(layout.warehouse.x + 8 + col * 44,
-            gridTop + row * 44, 44, 44,
-            kWhUiSlotBase_ + i, NH3Dlg::Assets::ARTIFACT_DEF, 0, 0, FALSE, FALSE);
-        g_wh_ui_live_.slots[i] = slot;
-        WarehouseUiAdd_(dlg, 0, 0, slot);
-    }
-    const int buttonY = layout.warehouse.y + layout.warehouse.height - 34;
     H3DlgText* prev = H3DlgText::Create(layout.warehouse.x + 8,
-        buttonY, 52, 24, "<", NH3Dlg::Text::SMALL,
+        footerY, 52, 24, "<", NH3Dlg::Text::SMALL,
         eTextColor::REGULAR, kWhUiPrevId_, eTextAlignment::MIDDLE_CENTER, 0);
     H3DlgText* next = H3DlgText::Create(layout.warehouse.x + layout.warehouse.width - 60,
-        buttonY, 52, 24, ">", NH3Dlg::Text::SMALL,
+        footerY, 52, 24, ">", NH3Dlg::Text::SMALL,
         eTextColor::REGULAR, kWhUiNextId_, eTextAlignment::MIDDLE_CENTER, 0);
     WarehouseUiAdd_(dlg, 0, 0, prev);
     WarehouseUiAdd_(dlg, 0, 0, next);
     H3DlgTransparentItem* prevHit = H3DlgTransparentItem::Create(
-        layout.warehouse.x + 8, buttonY, 52, 24, kWhUiPrevId_);
+        layout.warehouse.x + 8, footerY, 52, 24, kWhUiPrevId_);
     H3DlgTransparentItem* nextHit = H3DlgTransparentItem::Create(
         layout.warehouse.x + layout.warehouse.width - 60,
-        buttonY, 52, 24, kWhUiNextId_);
+        footerY, 52, 24, kWhUiNextId_);
     WarehouseUiAdd_(dlg, 0, 0, prevHit);
     WarehouseUiAdd_(dlg, 0, 0, nextHit);
 

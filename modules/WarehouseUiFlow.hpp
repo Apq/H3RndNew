@@ -50,21 +50,33 @@ struct Layout {
     std::size_t rows = 0;
 };
 
-inline constexpr int kBackpackWidth = 405;
+inline constexpr int kBackpackWidth = 405;    // HD 完整背包视觉区（0x01006620 实测）
 inline constexpr int kBackpackHeight = 459;
-inline constexpr int kPanelMinWidth = 160;
+inline constexpr int kPanelWidth = 405;       // 仓库面板与完整背包同尺寸（用户裁定）
 inline constexpr int kPanelHeight = 459;
 inline constexpr int kPanelGap = 8;
 inline constexpr int kScreenMargin = 8;
-inline constexpr int kGridCellPitch = 44;
-inline constexpr std::size_t kMinGridColumns = 3;
+// HD 完整背包内部几何（反汇编 0x039A00 构造实测，仓库面板同构复用）：
+// 标题 405x30 @ (0,18)；BkPack.pcx 369x369 @ (18,50)；
+// 8x8 网格 hit 47x47 步距 46 @ (18+col*46, 50+row*46)；
+// DEF 图标 44x44 @ (20+col*46, 51+row*46)。
+inline constexpr int kTitleHeight = 30;
+inline constexpr int kTitleOffsetY = 18;
+inline constexpr int kGridOriginDX = 18;
+inline constexpr int kGridOriginDY = 50;
+inline constexpr int kGridPitch = 46;
+inline constexpr int kGridHitSize = 47;
+inline constexpr int kGridDefSize = 44;
+inline constexpr int kGridDefDX = 2;
+inline constexpr int kGridDefDY = 1;
+inline constexpr std::size_t kGridColumns = 8;
 inline constexpr std::size_t kPageRows = 8;
-inline constexpr std::size_t kPageSize = 24;
+inline constexpr std::size_t kPageSize = kGridColumns * kPageRows; // 64，与扩展同构
 inline constexpr int kMaxArtifactId = 143;
 inline constexpr int kScrollArtifactId = 1;
 inline constexpr int kMaxScrollSubtype = 69;
 inline constexpr int kMinScreenWidth = kScreenMargin + kBackpackWidth
-    + kPanelGap + kPanelMinWidth + kScreenMargin;
+    + kPanelGap + kPanelWidth + kScreenMargin; // 834：并排放下两个 405x459
 inline constexpr int kMinScreenHeight = kPanelHeight;
 
 inline int ClampPanelY(int requestedY, int screenHeight) noexcept {
@@ -74,15 +86,12 @@ inline int ClampPanelY(int requestedY, int screenHeight) noexcept {
     return requestedY;
 }
 
-inline std::size_t PanelColumns(int panelWidth) noexcept {
-    const int gridWidth = panelWidth - 2 * kScreenMargin;
-    if (gridWidth <= 0) return kMinGridColumns;
-    const std::size_t columns = static_cast<std::size_t>(gridWidth / kGridCellPitch);
-    return columns < kMinGridColumns ? kMinGridColumns : columns;
+inline std::size_t PanelColumns(int) noexcept {
+    return kGridColumns;
 }
 
-inline std::size_t PanelPageSize(int panelWidth) noexcept {
-    return PanelColumns(panelWidth) * kPageRows;
+inline std::size_t PanelPageSize(int) noexcept {
+    return kPageSize;
 }
 
 inline Layout MakeLayout(int screenWidth, int screenHeight, int backpackX,
@@ -101,28 +110,25 @@ inline Layout MakeLayout(int screenWidth, int screenHeight, int backpackX,
     const std::int64_t leftWidth = oldX - kPanelGap - kScreenMargin;
     int placedBackpackX = backpackX;
     int panelX = 0;
-    int panelWidth = 0;
-    if (originalOnScreen && rightWidth >= kPanelMinWidth) {
+    if (originalOnScreen && rightWidth >= kPanelWidth) {
         panelX = static_cast<int>(rightX);
-        panelWidth = static_cast<int>(rightWidth);
-        result.warehouse = {panelX, top, panelWidth, kPanelHeight};
+        result.warehouse = {panelX, top, kPanelWidth, kPanelHeight};
         result.side = LayoutSide::Right;
-    } else if (originalOnScreen && leftWidth >= kPanelMinWidth) {
-        const int leftPanelWidth = static_cast<int>(leftWidth);
-        result.warehouse = {backpackX - kPanelGap - leftPanelWidth, top,
-            leftPanelWidth, kPanelHeight};
+    } else if (originalOnScreen && leftWidth >= kPanelWidth) {
+        panelX = static_cast<int>(oldX - kPanelGap - kPanelWidth);
+        result.warehouse = {panelX, top, kPanelWidth, kPanelHeight};
         result.side = LayoutSide::Left;
     } else {
+        // 原位两侧都放不下同尺寸面板：背包贴左缘，面板固定 405 宽在其右侧。
         const int fallbackX = kScreenMargin;
         const std::int64_t fallbackPanelX =
             static_cast<std::int64_t>(fallbackX) + kBackpackWidth + kPanelGap;
         const std::int64_t fallbackWidth = static_cast<std::int64_t>(screenWidth)
             - kScreenMargin - fallbackPanelX;
-        if (fallbackWidth < kPanelMinWidth) return result;
-        panelX = static_cast<int>(fallbackPanelX);
-        panelWidth = static_cast<int>(fallbackWidth);
+        if (fallbackWidth < kPanelWidth) return result;
         placedBackpackX = fallbackX;
-        result.warehouse = {panelX, top, panelWidth, kPanelHeight};
+        panelX = static_cast<int>(fallbackPanelX);
+        result.warehouse = {panelX, top, kPanelWidth, kPanelHeight};
         result.side = LayoutSide::Right;
     }
 
@@ -132,7 +138,7 @@ inline Layout MakeLayout(int screenWidth, int screenHeight, int backpackX,
         result = {};
         return result;
     }
-    result.columns = PanelColumns(result.warehouse.width);
+    result.columns = kGridColumns;
     result.page_size = kPageSize;
     result.rows = kPageRows;
     return result;

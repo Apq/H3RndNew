@@ -49,58 +49,64 @@ bool SameState(const State& left, const State& right) {
 }
 
 void CheckLayoutAndPaging() {
-    for (int width : {640, 800, 1920}) {
+    // 面板与完整背包同尺寸 405x459：并排最小宽 = 8+405+8+405+8 = 834。
+    for (int width : {834, 1024, 1920}) {
         const auto layout = warehouseui::MakeLayout(width, 480, 8, -20);
-        Check(layout.fits, "640/800/1920 layout fits");
+        Check(layout.fits, "834/1024/1920 layout fits");
         Check(layout.backpack.height == 459 && layout.warehouse.height == 459,
               "backpack and warehouse heights are 459");
+        Check(layout.warehouse.width == 405,
+              "warehouse panel is exactly the backpack-sized 405 wide");
         Check(layout.backpack.y == 0, "negative y clamps to zero");
         Check(layout.backpack.x >= 0 && layout.warehouse.x >= 0
                   && layout.warehouse.Right() <= width,
               "layout remains inside screen");
         Check(!layout.backpack.Overlaps(layout.warehouse),
               "backpack and warehouse never overlap");
-        Check(layout.warehouse.width >= 160 && layout.columns >= 3
-                  && layout.page_size == 24,
-              "panel width and fixed 3x8 page are valid");
+        Check(layout.columns == 8 && layout.page_size == 64,
+              "panel mirrors the native 8x8 grid page");
     }
+    Check(!warehouseui::MakeLayout(833, 480, 8, 0).fits,
+          "width below 834 fails closed");
 
-    const auto right = warehouseui::MakeLayout(800, 480, 8, 999);
+    const auto right = warehouseui::MakeLayout(1024, 480, 8, 999);
     Check(right.fits && right.side == LayoutSide::Right
               && right.backpack.y == 21,
           "right layout and positive y clamp");
 
-    const auto left = warehouseui::MakeLayout(800, 480, 300, 20);
+    const auto left = warehouseui::MakeLayout(1024, 480, 500, 20);
     Check(left.fits && left.side == LayoutSide::Left,
           "left fallback is preferred when right is too narrow");
     Check(left.warehouse.Right() + 8 <= left.backpack.x,
           "left panel keeps eight pixel gap");
 
-    const auto moved = warehouseui::MakeLayout(640, 480, 500, 500);
+    const auto moved = warehouseui::MakeLayout(900, 480, 500, 500);
     Check(moved.fits && moved.backpack.x == 8
               && moved.side == LayoutSide::Right,
-          "640 fallback moves backpack to x=8 and uses right panel");
-    Check(!warehouseui::MakeLayout(580, 480, 8, 0).fits,
-          "width below 581 fails closed");
-    Check(!warehouseui::MakeLayout(640, 458, 8, 0).fits,
+          "narrow fallback moves backpack to x=8 and uses right panel");
+    const auto squeezed = warehouseui::MakeLayout(900, 480, 400, 0);
+    Check(squeezed.fits && squeezed.backpack.x == 8
+              && squeezed.side == LayoutSide::Right,
+          "centered backpack with no side room falls back to left-edge pair");
+    Check(!warehouseui::MakeLayout(1024, 458, 8, 0).fits,
           "height below 459 fails closed");
-    Check(warehouseui::MakeLayout(640, 480, -100, 0).fits,
+    Check(warehouseui::MakeLayout(900, 480, -100, 0).fits,
           "off-screen preferred position uses safe fallback");
 
     const std::size_t maximum = (std::numeric_limits<std::size_t>::max)();
     Check(warehouseui::PageCount(0) == 0
-              && warehouseui::PageCount(24) == 1
-              && warehouseui::PageCount(25) == 2,
-          "page boundaries 0/24/25");
-    Check(warehouseui::PageBegin(25, 1) == 24
-              && warehouseui::PageItemCount(25, 1) == 1,
+              && warehouseui::PageCount(64) == 1
+              && warehouseui::PageCount(65) == 2,
+          "page boundaries 0/64/65");
+    Check(warehouseui::PageBegin(65, 1) == 64
+              && warehouseui::PageItemCount(65, 1) == 1,
           "page begin and item count");
     Check(warehouseui::PageCount(maximum)
-              == maximum / 24 + (maximum % 24 == 0 ? 0u : 1u),
+              == maximum / 64 + (maximum % 64 == 0 ? 0u : 1u),
           "page count is size_t overflow safe");
     const auto last = warehouseui::MakePageView(
         maximum, warehouseui::PageCount(maximum) - 1);
-    Check(last.begin <= maximum && last.count > 0 && last.count <= 24,
+    Check(last.begin <= maximum && last.count > 0 && last.count <= 64,
           "huge final page remains bounded");
     Check(warehouseui::PageBegin(maximum, maximum) == maximum,
           "huge out-of-range page is rejected");
