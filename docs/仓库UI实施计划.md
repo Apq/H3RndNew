@@ -377,4 +377,14 @@
 - 离线回归：`CheckRound14StatusBar` 覆盖文案拼接（普通/卷轴/空名/截断/容量拒绝/空法术名退化）与几何共存边界；UI flow 203→**212**；python 回归无需改素材（无新素材）保持 **11/11**（`PagerRowBottomGap` 一致性断言仍满足 18≤37≤40）。
 
 ### 第十四轮验证边界
-2026-10-14 12:1x（源码冻结 35 个 C++ 文件）：`build.bat` + 审计全绿（0 警告 0 错误、13 项 PASS、**UI flow 212**、PCX 50/290）；素材独立回归 11/11（同轮含第 13 轮的 `PagerRowBottomGap` 一致性断言）；`deploy.bat` 退出码 0，Release 与 Packs SHA256 均为 `B13D24C34847E89412A39F6E16989CBF2F3F1C07468570E424DB94194D3D6904`，whui 50 张逐张对拍一致，ini 双侧一致。仓库状态条实际显示、悬停提示与背包逐字同款（含颜色）、离开保留文案、分页行配置边界的实机观感由用户验收。
+2026-10-14 12:1x（源码冻结 35 个 C++ 文件）：`build.bat` + 审计全绿（0 警告 0 错误、13 项 PASS、**UI flow 212**、PCX 50/290）；素材独立回归 11/11（同轮含第 13 轮的 `PagerRowBottomGap` 一致性断言）；`deploy.bat` 退出码 0，Release 与 Packs SHA256 一致，whui 50 张逐张对拍一致，ini 双侧一致。仓库状态条实际显示、悬停提示与背包逐字同款（含颜色）、离开保留文案、分页行配置边界的实机观感由用户验收。
+
+#### 第十三/十四轮追加修复：状态条地址空间混淆导致仓库界面打不开（2026-10-14 12:19 实机报告）
+
+用户报告“仓库界面打不开了”。日志（`H3RndNew_20261014_121901.log`）定案：三次开窗都**没有** `仓库UI: attached ...` 行，且首帧即 `[Guard] WarehouseUiModal 异常 0xC0000005(访问冲突: 写入 0xC76ABA00) addr=0x0470B609 HD_SOD.dll+0x10FB609`；后两次被 Guard 的异常聚合抑制未重复打。**崩溃 PC 在 HD_SOD 的 `.data` 段**（RVA 0x10FB609 ∈ .data 0x155000..0x1114ECC）= 跳进数据执行 → 间接调用了错误指针。
+
+根因：round-14 初版把 `H3DlgTextPcx` 构造 `0x5BCB70` 与游戏 `operator new` `0x617492` **当成 HD_SOD 的 RVA 且加了 HD_SOD 基址**——这两个是 **H3.exe 的绝对地址**（H3API 本身就 `THISCALL_12(H3DlgTextPcx*, 0x5BCB70, …)` 直接调用，可作铁证），真正属于 HD_SOD 的是 `0x10FADB0`/`0x10FAA10`/`0x1006620`/`0x113EA2D` 那一批。归属表与判别法已写进 H3Note（commit `e1e0fe8`）。
+
+修复：**不再自行解析 H3.exe 侧的任何函数指针**，全改 H3API 官方路径——创建用 `H3ObjectAllocator<H3DlgTextPcx>().allocate(1)`（H3API 已证 `sizeof(H3DlgTextPcx)==0x54`，与原生 `new(0x54)` 完全一致，析构仍归 dialog owned-list）+ `THISCALL_12(0x5BCB70, …)` 按原生 11 个栈参数**逐参同构**（末位背包传 0；H3API 的 `Create` 内部固定传 8，故不直接用它）；悬停更新改用 `SetText`（→`vSetText`=原生 vtable[13]）→ `Draw`（→`vDrawToWindow`=vtable[4]）→ `Refresh`（经父对话框刷屏，对应原生 `0x10FAA10` 效果）。同时：①创建逻辑独立成 `WarehouseUiCreateStatusBar_`——MSVC 禁止在“需要对象展开”（含 std::vector 局部对象）的函数里用 `__try`（C2712），必须拆出去，失败只等于“没有状态条”；②install 期对每个解析出的指针做 `VirtualQuery` 归属自证并打日志（模块/偏移/页属性，期望代码页但不可执行或模块不符即告警），把这次的“肉眼读不出”的地址空间混淆变成日志里一眼可查。
+
+验证：`build.bat` + 审计全绿（0 警告 0 错误、13 项 PASS、UI flow 212、PCX 50/290）；`deploy.bat` 退出码 0，Release 与 Packs 哈希一致（`7980FF66A86279A120E923B4722FB13CBB12F92A735C64CD1F64412383B80B84`）；面板项实际约 130 个 < 容量 320（状态条随 `ShowActivate/HideDeactivate` 展开收起同步，不会重蹈 round-12“登记表上限”那种静默失败）。**实机待用户验收：打开仓库是否恢复、状态条是否显示、悬停提示是否与背包一致**。

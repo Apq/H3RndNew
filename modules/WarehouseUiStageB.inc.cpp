@@ -55,8 +55,9 @@ struct WarehouseUiLive_ {
     H3DlgText* pagerText[warehouseui::kPagerMaxButtons] = {};
     H3DlgDef* slots[kWhUiSlotCount_] = {};
     // 底部状态条（round-14）：原生 H3DlgTextPcx（HD_TStat.pcx 底 + smalfont.fnt），
-    // 与背包状态条同一构造、同一悬停文案源。
-    H3DlgItem* statusBar = nullptr;
+    // 与背包状态条同一构造、同一悬停文案源。类型取 H3DlgTextPcx 以便用 H3API
+    // 的 SetText/Draw/Refresh（与原生 vtable[13]/vtable[4]+刷屏序列逐槽对应）。
+    H3DlgTextPcx* statusBar = nullptr;
     H3DlgItem* panelItems[kWhUiPanelItemCapacity_] = {};
     std::size_t panelItemCount = 0;
     std::vector<std::size_t> filtered;
@@ -85,21 +86,20 @@ static UINT32 g_wh_ui_shadow_ = 0;
 // sb%04u%04u%1u%1u 是运行时缓存键，实际素材 DiBoxBck.PCX + dialgbox.def。
 using WarehouseSkinFactory_ = H3DlgPcx16* (__fastcall *)(int, int, int, int, int, int, int);
 static WarehouseSkinFactory_ g_wh_ui_skin_factory_ = nullptr;
-// round-14：原生背包状态条的构造链（与 0x039E03..0x039E63 逐参同构）。
-//   H3DlgTextPcx 构造 0x5BCB70 = thiscall(x, y, w, h, text, font, pcx, 1, id, 5, 0)，
-//   对象 0x54 字节先由游戏 new(0x617492, cdecl) 分配；析构由 dialog owned-list 统一
-//   完成（与页签/页码等原生 item 相同），插件不自行 free。
-//   0x10FAA10(item) 是原生悬停路径用的“只刷该 item 屏幕矩形”助手（00603190）。
-//   默认文案 RVA 0x13EA2D 是一个空串（背包状态条初始无字，悬停才填名字）。
-using WarehouseTextPcxFactory_ = H3DlgItem* (__fastcall *)(void* self, void*,
-    int x, int y, int width, int height, const char* text, const char* font,
-    const char* pcx, int a8, int id, int a10, int a11);
-using WarehouseGameNew_ = void* (__cdecl *)(unsigned size);
-using WarehouseStatusRefresh_ = void (__fastcall *)(H3DlgItem* self);
-static WarehouseTextPcxFactory_ g_wh_ui_textpcx_factory_ = nullptr;
-static WarehouseGameNew_ g_wh_ui_game_new_ = nullptr;
-static WarehouseStatusRefresh_ g_wh_ui_status_refresh_ = nullptr;
-static const char* g_wh_ui_status_default_text_ = nullptr;
+// round-14：原生背包状态条创建**不再自己解析函数指针**（2026-10-14 崩溃复盘）。
+//   H3DlgTextPcx 构造 0x5BCB70 / H3DlgText 构造 0x5BC6A0 / 游戏 operator new
+//   0x617492 都是 **H3.exe 的绝对地址**——H3API 本身就 THISCALL_12(..., 0x5BCB70, ...)
+//   直接调用；round-14 初版误把它们当 HD_SOD 的 RVA 再加基址，跳进 HD_SOD 别的
+//   代码并最终在 .data 段执行而崩溃（addr=HD_SOD+0x10FB609）。现改用 H3API 官方
+//   路径：H3ObjectAllocator<H3DlgTextPcx>().allocate(1)（游戏分配器，析构与
+//   dialog owned-list 的 delete 匹配，size 与原生 new(0x54) 完全一致）
+//   + THISCALL_12 按原生 11 个栈原样传（末位背包用 0，H3API 的 Create 固定写 8，
+//   这里与背包逐参同构）。
+//   屏幕刷新同样走 H3API：H3DlgText::SetText → vSetText(vtable[13]，原生同槽)、
+//   H3DlgItem::Draw() → vDrawToWindow(vtable[4])、H3DlgItem::Refresh() 经父对话框
+//   刷屏（对应原生 0x10FAA10 的效果），不再解析 HD_SOD 的刷新助手。
+static constexpr unsigned kWhUiStatusCtorVa_ = 0x5BCB70;  // H3.exe 绝对 VA，勿加基址
+static constexpr int kWhUiStatusColor_ = 1;               // 原生构造第 8 参（背包同色）
 
 static constexpr int kWhUiOpenId_ = 30200;
 static constexpr int kWhUiCloseId_ = 30060;
@@ -131,9 +131,8 @@ static constexpr int kWhUiTakeAllId_ = 30201;
 static constexpr int kWhUiPutAllId_ = 30202;
 // 分页栏页码按钮（round-7/12）：30400..30407（上限 8 个，实际可见数按宽度取）。
 static constexpr int kWhUiPagerBase_ = 30400;
-// 状态条（round-14）：H3DlgTextPcx 对象 0x54 字节；ID 只在日志里用（原生文本项
-// 不参与 0x5FF9A0 命中测试，不会以命令 itemId 出现）。
-static constexpr unsigned kWhUiStatusBytes_ = 0x54;
+// 状态条（round-14）：ID 只在日志里用（原生文本项不参与 0x5FF9A0 命中测试，不会以
+// 命令 itemId 出现）。对象大小由 H3ObjectAllocator<H3DlgTextPcx> 保证与原生 0x54 一致。
 static constexpr int kWhUiStatusId_ = 30500;
 // 整理按钮（round-8）：分页条左侧预留按钮位，仅常规页签显示，做存储层排序。
 static constexpr int kWhUiOrganizeId_ = 30052;
@@ -597,7 +596,7 @@ static int WarehouseUiBackpackSlotAtPoint_(H3Msg* msg) noexcept
 //  3) 更新序列与原生完全相同：SetText(vtable[13]) → Draw(vtable[4]) → 0x10FAA10
 //     只刷该 item 的屏幕矩形；离开物品不清空（背包侧同样保留最后文案）。
 static void WarehouseUiUpdateSlotStatus_(H3BaseDlg* dlg, H3Msg* msg) noexcept {
-    H3DlgItem* bar = g_wh_ui_live_.statusBar;
+    H3DlgTextPcx* bar = g_wh_ui_live_.statusBar;
     if (!dlg || !msg || !bar || !g_wh_ui_live_.expanded) return;
     if (g_wh_ui_live_.dialog != dlg) return;
     const int local = warehouseui::GridSlotFromPoint(msg->GetX(), msg->GetY(),
@@ -633,13 +632,13 @@ static void WarehouseUiUpdateSlotStatus_(H3BaseDlg* dlg, H3Msg* msg) noexcept {
         return;
     __try {
         if (!WarehouseUiOwns_(dlg, bar)) return;
-        void** vtable = *reinterpret_cast<void***>(bar);
-        if (!vtable || !vtable[4] || !vtable[13]) return;
-        reinterpret_cast<void(__fastcall*)(H3DlgItem*, void*, const char*)>(
-            vtable[13])(bar, nullptr, text);              // SetText（原生同槽）
-        reinterpret_cast<void(__fastcall*)(H3DlgItem*, void*)>(vtable[4])(
-            bar, nullptr);                                // Draw
-        if (g_wh_ui_status_refresh_) g_wh_ui_status_refresh_(bar);
+        // 与原生序列逐槽对应，但走 H3API（不自己解析地址）：
+        //   SetText → vSetText（原生 vtable[13]）
+        //   Draw    → vDrawToWindow（原生 vtable[4]）
+        //   Refresh → 经父对话框刷该 item 区域（对应原生 0x10FAA10 的效果）
+        bar->SetText(text);
+        bar->Draw();
+        bar->Refresh();
     } __except (GuardCrashFilter_(GUARD_WH_UI_POST_COMMON, GetExceptionInformation())) {}
 }
 
@@ -971,6 +970,26 @@ static bool WarehouseUiNativeAnchor_(H3BaseDlg* dlg, int& x, int& y) noexcept
     return false;
 }
 
+// 状态条创建（round-14）：单独成函数——MSVC 不允许在“需要对象展开”的函数里使用
+// __try（C2712），而 WarehouseUiAttach_ 里有 std::vector 等局部对象，所以把 SEH
+// 隔离推进这个小函数：任何失败都只等于“没有状态条”，绝不拖累面板本身创建。
+static H3DlgTextPcx* WarehouseUiCreateStatusBar_(int x, int y) noexcept
+{
+    H3DlgTextPcx* bar = nullptr;
+    __try {
+        bar = H3ObjectAllocator<H3DlgTextPcx>().allocate(1);
+        if (bar) {
+            THISCALL_12(H3DlgTextPcx*, kWhUiStatusCtorVa_, bar, x, y,
+                warehouseui::kStatusWidth, warehouseui::kStatusHeight,
+                "", "smalfont.fnt", "HD_TStat.pcx",
+                kWhUiStatusColor_, kWhUiStatusId_, 5, 0);
+        }
+    } __except (GuardCrashFilter_(GUARD_WH_UI_POST_COMMON, GetExceptionInformation())) {
+        bar = nullptr;
+    }
+    return bar;
+}
+
 static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
                                int backpackX, int backpackY) noexcept
 {
@@ -1198,24 +1217,16 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
     // 底部状态条（round-14 用户裁定）：背包弹窗自带一条状态条（原生 ID 777，
     // (8,433) 389x18，HD_TStat.pcx+smalfont.fnt），仓库侧按“同构造、同几何规范、
     // 同一悬停文案源”补一条，悬停仓库道具时提示与背包完全一致（含文字颜色——
-    // 颜色随 H3DlgTextPcx 构造参数走，不自己另调）。
+    // 颜色随 H3DlgTextPcx 构造参数走，不自己另调）。整段独立 __try 隔离：任何失败
+    // 只等于“没有状态条”，绝不拖累面板本身的创建（2026-10-14 崩溃的教训）。
     {
-        if (g_wh_ui_textpcx_factory_ && g_wh_ui_game_new_ && g_wh_ui_status_default_text_) {
-            void* memory = g_wh_ui_game_new_(kWhUiStatusBytes_);
-            if (memory) {
-                g_wh_ui_live_.statusBar = g_wh_ui_textpcx_factory_(memory, nullptr,
-                    layout.warehouse.x + warehouseui::kStatusInsetX,
-                    layout.warehouse.y + warehouseui::kStatusTextY,
-                    warehouseui::kStatusWidth, warehouseui::kStatusHeight,
-                    g_wh_ui_status_default_text_, "smalfont.fnt", "HD_TStat.pcx",
-                    1, kWhUiStatusId_, 5, 0);
-            }
-            WarehouseUiAddPanelItem_(dlg, g_wh_ui_live_.statusBar);
-        }
+        const int barX = layout.warehouse.x + warehouseui::kStatusInsetX;
+        const int barY = layout.warehouse.y + warehouseui::kStatusTextY;
+        H3DlgTextPcx* bar = WarehouseUiCreateStatusBar_(barX, barY);
+        g_wh_ui_live_.statusBar = bar;
+        if (bar) WarehouseUiAddPanelItem_(dlg, bar);
         LogInfo("仓库UI: 状态条 create=%d id=%d at=(%d,%d) %dx%d",
-            g_wh_ui_live_.statusBar ? 1 : 0, kWhUiStatusId_,
-            layout.warehouse.x + warehouseui::kStatusInsetX,
-            layout.warehouse.y + warehouseui::kStatusTextY,
+            bar ? 1 : 0, kWhUiStatusId_, barX, barY,
             warehouseui::kStatusWidth, warehouseui::kStatusHeight);
     }
     *reinterpret_cast<UINT32*>(reinterpret_cast<BYTE*>(dlg) + 0x70) =
@@ -1309,6 +1320,39 @@ static int __stdcall OnWarehouseUiModalEnd_(LoHook*, HookContext* context)
     return EXEC_DEFAULT;
 }
 
+// 解析结果自证（2026-10-14 崩溃教训）：把指针的归属模块、偏移、页保护打进日志，
+// 模块不符或“期望代码但落在不可执行页”时直接告警。
+// 背景：round-14 初版把 H3.exe 的绝对地址（H3DlgTextPcx 构造 0x5BCB70、游戏 new
+// 0x617492）当成 HD_SOD 的 RVA 再加基址，跳进 HD_SOD 别的代码并在 .data 段执行，
+// 抛出 0xC0000005 让仓库面板整块创建失败（日志 addr=HD_SOD+0x10FB609）。
+// 这类错误靠肉眼读常量看不出来，必须让日志自己说话。
+static void WarehouseUiLogPointer_(const char* name, const void* address,
+                                   const void* expectedModule, bool needsCode) noexcept {
+    if (!address) {
+        LogWarn("仓库UI: 指针 %s 解析为空", name);
+        return;
+    }
+    MEMORY_BASIC_INFORMATION info = {};
+    if (VirtualQuery(address, &info, sizeof(info)) != sizeof(info)) {
+        LogError("仓库UI: 指针 %s 不可查询 addr=%p", name, address);
+        return;
+    }
+    const DWORD codePages = PAGE_EXECUTE | PAGE_EXECUTE_READ
+        | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    const bool executable = (info.Protect & codePages) != 0;
+    const char* owner = "其它模块";
+    if (info.AllocationBase == GetModuleHandleW(nullptr)) owner = "H3.exe";
+    else if (info.AllocationBase == GetModuleHandleW(L"HD_SOD.dll")) owner = "HD_SOD.dll";
+    else if (info.AllocationBase == GetModuleHandleW(L"H3RndNew.dll")) owner = "H3RndNew.dll";
+    const unsigned offset = static_cast<unsigned>(
+        static_cast<const BYTE*>(address) - static_cast<const BYTE*>(info.AllocationBase));
+    const bool mismatch = expectedModule && info.AllocationBase != expectedModule;
+    LogInfo("仓库UI: 指针 %s = %s+0x%X (%p) protect=0x%X%s%s", name, owner, offset,
+        address, info.Protect,
+        needsCode ? (executable ? "" : " [警告: 期望代码页但不可执行]") : "",
+        mismatch ? " [警告: 归属模块不符]" : "");
+}
+
 } // namespace
 
 void InstallWarehouseUiStageB_()
@@ -1320,15 +1364,18 @@ void InstallWarehouseUiStageB_()
     g_wh_ui_scroll_enabled_ = reinterpret_cast<const int*>(base + 0x157FB8);
     g_wh_ui_shadow_ = base + 0x6620; // 完整背包外框阴影（与 0x039A00 构造同一函数）
     g_wh_ui_skin_factory_ = reinterpret_cast<WarehouseSkinFactory_>(base + 0x0FADB0);
-    // round-14：状态条三件套 + 空白默认文案，均取自同一份已审计的 HD_SOD 构建
-    // （StageA 的字节门卫保证构建一致；任一为空则“无状态条”而非崩溃）。
-    g_wh_ui_textpcx_factory_ =
-        reinterpret_cast<WarehouseTextPcxFactory_>(base + 0x005BCB70);
-    g_wh_ui_game_new_ = reinterpret_cast<WarehouseGameNew_>(base + 0x00617492);
-    g_wh_ui_status_refresh_ =
-        reinterpret_cast<WarehouseStatusRefresh_>(base + 0x000FAA10);
-    g_wh_ui_status_default_text_ =
-        reinterpret_cast<const char*>(base + 0x0013EA2D);
+    // round-14：状态条不再解析任何 H3.exe 侧的构造/分配/刷新指针（0x5BCB70、
+    // 0x617492 等是 H3.exe 的绝对地址，加 HD_SOD 基址会跳到别处代码并崩溃——
+    // 2026-10-14 实机崩溃复盘）。创建与刷新全部走 H3API：
+    // H3ObjectAllocator<H3DlgTextPcx> + THISCALL_12(0x5BCB70) + SetText/Draw/Refresh。
+    // 每个解析结果自证归属（模块/偏移/页属性），地址空间混淆当场暴露在日志里。
+    WarehouseUiLogPointer_("ScrollEnabled", g_wh_ui_scroll_enabled_, module, false);
+    WarehouseUiLogPointer_("Shadow", reinterpret_cast<const void*>(g_wh_ui_shadow_),
+        module, true);
+    WarehouseUiLogPointer_("SkinFactory",
+        reinterpret_cast<const void*>(g_wh_ui_skin_factory_), module, true);
+    WarehouseUiLogPointer_("StatusBarCtor(H3.exe 绝对地址)",
+        reinterpret_cast<const void*>(kWhUiStatusCtorVa_), GetModuleHandleW(nullptr), true);
     g_wh_ui_modal_hook_ = _PI->WriteLoHook(base + kWhUiModalSiteRva_,
         &OnWarehouseUiModal_);
     g_wh_ui_modal_end_hook_ = _PI->WriteLoHook(base + kWhUiModalEndRva_,
