@@ -214,6 +214,12 @@ inline std::size_t TabOffsetShift(std::size_t offset, int delta,
     return TabOffsetClamp(next, total, slots);
 }
 
+// 整理按钮的显隐（round-12 修正）：按“当前页签种类”而不是顺序下标判断。TabOrder 可
+// 配置，常规不一定是第 0 个显示槽；用下标判断会让整理按钮跑到别的页签上。
+inline constexpr bool TidyVisible(bool expanded, TabKind activeTab) noexcept {
+    return expanded && activeTab == TabKind::Regular;
+}
+
 } // namespace warehouseui
 
 #endif // H3RNDNEW_WAREHOUSE_UI_CATALOG_HPP

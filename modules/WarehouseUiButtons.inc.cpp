@@ -43,10 +43,11 @@ struct WarehouseButtonPair_ {
 };
 static WarehouseButton_ g_wh_ui_buttons_[4];
 static WarehouseTabPair_ g_wh_ui_tabs_[kWhUiTabSlotCount_], g_wh_ui_arrows_[2];
-// 分页栏（round-7）：4 个页码按钮与 2 个底部箭头（与页签行箭头分开存）。
-static WarehouseTabPair_ g_wh_ui_pagers_[warehouseui::kPagerButtonCount];
-static WarehouseTabPair_ g_wh_ui_footer_arrows_[2];
+// 分页栏（round-12）：只留数字页码按钮，按“能摆几个就摆几个”创建（上限 8 个），
+// 两端 < > 箭头已按用户裁定删除。
+static WarehouseTabPair_ g_wh_ui_pagers_[warehouseui::kPagerMaxButtons];
 static std::size_t g_wh_ui_pager_window_begin_ = 0;
+static std::size_t g_wh_ui_pager_visible_ = 0;
 static H3LoadedPcx* g_wh_ui_button_images_[4][4] = {};
 static H3LoadedPcx* g_wh_ui_tab_images_[warehouseui::kTabCount][2] = {};
 static H3LoadedPcx* g_wh_ui_arrow_images_[2][2] = {};
@@ -67,13 +68,19 @@ struct WarehouseVisualResource_ {
     H3DlgPcx* item = nullptr;
     H3LoadedPcx* original = nullptr;
 };
-static WarehouseVisualResource_ g_wh_ui_visual_resources_[20];
+// 视觉控件登记表：这是“替换 PCX 原指针的恢复账本”（detach 要把每张 PCX 换回创建时的
+// BkPack 指针），不是素材缓存、也不表示仓库容量/页数上限，所以容量必须覆盖实际创建数。
+// round-12 实际：4 主按钮 + 8 页签 + 2 页签箭头 + 10 页码 + 1 整理 = 25，取 32 留余量。
+// （round-8..11 只有 20：整理是第 21 次 CreateVisual，被上限拒绝后 label=null，
+//  表现为“常规页看不到整理按钮”，但透明命中区仍会被创建并加入面板项。）
+static constexpr std::size_t kWhUiVisualResourceCapacity_ = 32;
+static WarehouseVisualResource_ g_wh_ui_visual_resources_[kWhUiVisualResourceCapacity_];
 static std::size_t g_wh_ui_visual_count_ = 0;
 
 // SetPcx不调整引用：保存创建时原指针，detach恢复后让原生析构释放原引用。
 static H3DlgPcx* WarehouseUiCreateVisual_(int x, int y, int w, int h, int id,
                                          H3LoadedPcx* image) noexcept {
-    if (g_wh_ui_visual_count_ >= 20) return nullptr;
+    if (!image || g_wh_ui_visual_count_ >= kWhUiVisualResourceCapacity_) return nullptr;
     H3DlgPcx* item = H3DlgPcx::Create(x, y, w, h, id, "BkPack.pcx");
     if (!item) return nullptr;
     g_wh_ui_visual_resources_[g_wh_ui_visual_count_++] = { item, item->GetPcx() };
@@ -181,12 +188,12 @@ static void WarehouseUiCacheImages_(H3DlgPcx* source) noexcept {
         g_wh_ui_arrow_images_[a][s] = WarehouseUiLoadOne_(file, 18, 22, key);
         all = all && g_wh_ui_arrow_images_[a][s] != nullptr;
     }
-    // 分页页码按钮底图：36x22 两态（无文字，数字由 H3DlgText 运行时叠加）。
+    // 分页页码按钮底图：28x22 两态（按“最多两位数”定宽，无文字，数字由 H3DlgText 叠加）。
     for (int s = 0; s < 2; ++s) {
         _snprintf_s(file, sizeof(file), _TRUNCATE, "pager_%c.pcx", s ? 's' : 'n');
         _snprintf_s(key, sizeof(key), _TRUNCATE, "whp%d", s);
         g_wh_ui_pager_images_[s] = WarehouseUiLoadOne_(file,
-            warehouseui::kPagerButtonWidth, warehouseui::kPagerButtonHeight, key);
+            warehouseui::kPagerNumberWidth, warehouseui::kPagerButtonHeight, key);
         all = all && g_wh_ui_pager_images_[s] != nullptr;
     }
     // 整理按钮底图：36x22 两态（“整理”二字直接烘焙，游戏字体不保证中文字形）。
@@ -194,7 +201,7 @@ static void WarehouseUiCacheImages_(H3DlgPcx* source) noexcept {
         _snprintf_s(file, sizeof(file), _TRUNCATE, "tidy_%c.pcx", s ? 's' : 'n');
         _snprintf_s(key, sizeof(key), _TRUNCATE, "whz%d", s);
         g_wh_ui_tidy_images_[s] = WarehouseUiLoadOne_(file,
-            warehouseui::kPagerButtonWidth, warehouseui::kPagerButtonHeight, key);
+            warehouseui::kOrganizeButtonWidth, warehouseui::kPagerButtonHeight, key);
         all = all && g_wh_ui_tidy_images_[s] != nullptr;
     }
     g_wh_ui_images_ready_ = all;
@@ -296,7 +303,8 @@ static void WarehouseUiResetTabs_() noexcept {
     for (auto& tab : g_wh_ui_tabs_) tab = {};
     for (auto& arrow : g_wh_ui_arrows_) arrow = {};
     for (auto& pager : g_wh_ui_pagers_) pager = {};
-    for (auto& arrow : g_wh_ui_footer_arrows_) arrow = {};
+    g_wh_ui_pager_window_begin_ = 0;
+    g_wh_ui_pager_visible_ = 0;
     g_wh_ui_tidy_ = {};
     g_wh_ui_tidy_hovered_ = false;
     g_wh_ui_pager_window_begin_ = 0;
@@ -324,27 +332,16 @@ static WarehouseTabPair_ WarehouseUiCreateArrow_(int arrow, int x, int y, int id
     g_wh_ui_arrows_[arrow] = pair;
     return pair;
 }
-// 分页栏底部箭头：与页签行箭头同素材、独立实例（ID 30050/30051）。
-static WarehouseTabPair_ WarehouseUiCreateFooterArrow_(int arrow, int x, int y,
-                                                       int id) noexcept {
-    WarehouseTabPair_ pair;
-    if (!WarehouseUiImagesReady_() || arrow < 0 || arrow >= 2) return pair;
-    pair.label = WarehouseUiCreateVisual_(x, y, 18, 22, id,
-        g_wh_ui_arrow_images_[arrow][0]);
-    pair.hit = H3DlgTransparentItem::Create(x, y, 18, 22, id);
-    g_wh_ui_footer_arrows_[arrow] = pair;
-    return pair;
-}
 // 分页页码按钮：36x22 底图 + 透明命中；数字文本由 StageB 叠加。
 static WarehouseTabPair_ WarehouseUiCreatePager_(int slot, int x, int y,
                                                  int id) noexcept {
     WarehouseTabPair_ pair;
     if (!WarehouseUiImagesReady_() || slot < 0
-        || slot >= warehouseui::kPagerButtonCount)
+        || slot >= warehouseui::kPagerMaxButtons)
         return pair;
-    pair.label = WarehouseUiCreateVisual_(x, y, warehouseui::kPagerButtonWidth,
+    pair.label = WarehouseUiCreateVisual_(x, y, warehouseui::kPagerNumberWidth,
         warehouseui::kPagerButtonHeight, id, g_wh_ui_pager_images_[0]);
-    pair.hit = H3DlgTransparentItem::Create(x, y, warehouseui::kPagerButtonWidth,
+    pair.hit = H3DlgTransparentItem::Create(x, y, warehouseui::kPagerNumberWidth,
         warehouseui::kPagerButtonHeight, id);
     g_wh_ui_pagers_[slot] = pair;
     return pair;
@@ -352,13 +349,19 @@ static WarehouseTabPair_ WarehouseUiCreatePager_(int slot, int x, int y,
 static std::size_t WarehouseUiPagerBegin_() noexcept {
     return g_wh_ui_pager_window_begin_;
 }
+static std::size_t WarehouseUiPagerVisible_() noexcept {
+    return g_wh_ui_pager_visible_;
+}
+static bool WarehouseUiTidyOwned_(H3BaseDlg* dlg) noexcept {
+    return WarehouseUiVisualOwns_(dlg, g_wh_ui_tidy_.label);
+}
 // 整理按钮（round-8）：分页栏最左侧预留的按钮位，36x22 两态（普通/悬停）。
 static WarehouseTabPair_ WarehouseUiCreateTidy_(int x, int y, int id) noexcept {
     WarehouseTabPair_ pair;
     if (!WarehouseUiImagesReady_()) return pair;
-    pair.label = WarehouseUiCreateVisual_(x, y, warehouseui::kPagerButtonWidth,
+    pair.label = WarehouseUiCreateVisual_(x, y, warehouseui::kOrganizeButtonWidth,
         warehouseui::kPagerButtonHeight, id, g_wh_ui_tidy_images_[0]);
-    pair.hit = H3DlgTransparentItem::Create(x, y, warehouseui::kPagerButtonWidth,
+    pair.hit = H3DlgTransparentItem::Create(x, y, warehouseui::kOrganizeButtonWidth,
         warehouseui::kPagerButtonHeight, id);
     g_wh_ui_tidy_ = pair;
     g_wh_ui_tidy_hovered_ = false;
@@ -390,41 +393,38 @@ static void WarehouseUiUpdateTidyHover_(H3BaseDlg* dlg, H3Msg* msg) noexcept {
     const int x = g_wh_ui_tidy_.label->GetX();
     const int y = g_wh_ui_tidy_.label->GetY();
     const bool hover = msg && msg->GetX() >= x
-        && msg->GetX() < x + warehouseui::kPagerButtonWidth
+        && msg->GetX() < x + warehouseui::kOrganizeButtonWidth
         && msg->GetY() >= y
         && msg->GetY() < y + warehouseui::kPagerButtonHeight;
     if (hover == g_wh_ui_tidy_hovered_) return;
     g_wh_ui_tidy_hovered_ = hover;
     g_wh_ui_tidy_.label->SetPcx(g_wh_ui_tidy_images_[hover ? 1 : 0]);
 }
-// 刷新分页栏：页码窗口含当前页、当前页高亮；两侧箭头按可翻性换态。
-// 页码超界（不足4页）时按钮整体 HideDeactivate，避免点空白页码。
+// 刷新分页栏（round-12）：只显示数字页码，数量按可用宽度取（仓库容量不设上限）；
+// 页码窗口含当前页，不足则整页隐藏，避免点击对应空白区却误判页码。
 static void WarehouseUiRefreshPager_(H3BaseDlg* dlg, std::size_t page,
                                      std::size_t pages, bool expanded) noexcept {
-    const auto window = warehouseui::MakeTabWindow(page, pages,
-        warehouseui::kPagerButtonCount);
-    g_wh_ui_pager_window_begin_ = pages != 0 ? window.begin : 0;
-    for (int i = 0; i < warehouseui::kPagerButtonCount; ++i) {
+    const std::size_t visible = warehouseui::PagerVisibleCount(pages,
+        warehouseui::FittingPagerButtons(warehouseui::kPanelWidth,
+            warehouseui::kPagerNumberWidth, warehouseui::kPagerButtonGap));
+    g_wh_ui_pager_visible_ = visible;
+    g_wh_ui_pager_window_begin_ = warehouseui::PagerWindowBegin(page, visible, pages);
+    for (int i = 0; i < warehouseui::kPagerMaxButtons; ++i) {
         const std::size_t at = g_wh_ui_pager_window_begin_
             + static_cast<std::size_t>(i);
-        const bool visible = pages != 0 && at < pages;
+        const bool shown = at < pages
+            && static_cast<std::size_t>(i) < visible;
         WarehouseTabPair_& pager = g_wh_ui_pagers_[i];
         if (WarehouseUiVisualOwns_(dlg, pager.label)) {
             pager.label->SetPcx(
-                g_wh_ui_pager_images_[at == page && visible ? 1 : 0]);
-            if (visible && expanded) pager.label->ShowActivate();
+                g_wh_ui_pager_images_[shown && at == page ? 1 : 0]);
+            if (shown && expanded) pager.label->ShowActivate();
             else pager.label->HideDeactivate();
         }
         if (pager.hit) {
-            if (visible && expanded) pager.hit->ShowActivate();
+            if (shown && expanded) pager.hit->ShowActivate();
             else pager.hit->HideDeactivate();
         }
-    }
-    for (int i = 0; i < 2; ++i) {
-        const bool enabled = i ? window.canNext : window.canPrev;
-        if (WarehouseUiVisualOwns_(dlg, g_wh_ui_footer_arrows_[i].label))
-            g_wh_ui_footer_arrows_[i].label->SetPcx(
-                g_wh_ui_arrow_images_[i][enabled ? 0 : 1]);
     }
 }
 static void WarehouseUiRefreshTabs_(H3BaseDlg* dlg, bool redraw) noexcept {

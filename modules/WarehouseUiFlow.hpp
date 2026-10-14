@@ -116,11 +116,71 @@ inline constexpr int kGridOriginDY = 50 + kTabRowHeight; // 82
 // 原生背包网格原点（无 Tab 行偏移）：完整背包窗口自身网格在 (18,50)。
 // 覆盖图标必须用这个值，误用仓库的 82 会整体下移 32px 造成“网格与物品错位”。
 inline constexpr int kBackpackGridOriginDY = 50;
-// 分页栏（round-7）：两侧箭头（复用 arrow 素材 18x22）+ 中间 4 个页码按钮。
-inline constexpr int kPagerButtonWidth = 36;
+// 分页栏（round-12）：只保留数字页码（无两端 < > 箭头）。页码按钮按可用宽度“能摆
+// 几个就摆几个”，点击直接跳到该页；最左侧固定给“整理”按钮留位。
+// 左右各留 18px（与页签行同规范，用户裁定）：可用区 = 405-36 = 369px。
+// 页码按钮宽度按“一般最多两位数”定，比两字按钮窄，同样宽度能多摆几个页号。
+inline constexpr int kPagerNumberWidth = 28;    // 两位数页码
+inline constexpr int kOrganizeButtonWidth = 36; // “整理”两个中文字
 inline constexpr int kPagerButtonHeight = 22;
 inline constexpr int kPagerButtonGap = 4;
-inline constexpr int kPagerButtonCount = 4;
+inline constexpr int kPagerLeftInset = 18;   // 整理按钮距面板左缘（同页签行 18px）
+inline constexpr int kPagerRightInset = 18;  // 页码区距面板右缘（同页签行 18px）
+inline constexpr int kPagerNumbersDX = kPagerLeftInset + kOrganizeButtonWidth
+    + kPagerButtonGap; // 58：页码区起点
+inline constexpr int kPagerMaxButtons = FittingTabCount(
+    kPanelWidth - kPagerNumbersDX - kPagerRightInset,
+    kPagerNumberWidth, kPagerButtonGap); // 329px 内放 10 个，占 316px
+// round-12（用户裁定）：分页栏去掉两端 < > 箭头，只留数字页码；仓库容量不设上限，
+// 页码是绝对页号，点哪个数字就跳到那页。可见个数只由宽度决定（能摆几个是几个）。
+inline constexpr std::size_t PagerVisibleCount(std::size_t pages,
+                                               int maxButtons) noexcept {
+    if (maxButtons <= 0) return 0;
+    return pages < static_cast<std::size_t>(maxButtons)
+        ? pages : static_cast<std::size_t>(maxButtons);
+}
+
+// 页码窗口起点：当前页尽量居中，这样左右两边都能直接点到（没有 < > 按钮时仍能
+// 一页页往前往后走，并保证末页可达）。页数不足一屏时固定从第 1 页开始。
+inline constexpr std::size_t PagerWindowBegin(std::size_t page,
+                                              std::size_t visible,
+                                              std::size_t pages) noexcept {
+    if (visible == 0 || pages <= visible) return 0;
+    const std::size_t last = pages - visible;
+    const std::size_t half = visible / 2;
+    const std::size_t begin = page > half ? page - half : 0;
+    return begin > last ? last : begin;
+}
+
+// round-12：分页行滚轮 = 上一页/下一页（页签行滚轮仍滚页签，互不抢占）。只在真的
+// 翻页时返回不同值，调用方据此决定是否消费该消息。
+inline constexpr std::size_t PagerWheelTarget(std::size_t page,
+                                             std::size_t pages,
+                                             int wheelDelta) noexcept {
+    if (pages == 0) return 0;
+    const int shift = TabWheelShift(wheelDelta);
+    if (shift < 0) return page > 0 ? page - 1 : page;
+    if (shift > 0) return page + 1 < pages ? page + 1 : page;
+    return page;
+}
+
+// 页码区可用宽（面板宽减去整理按钮位与右边距）能放下多少个页码按钮。
+inline constexpr int FittingPagerButtons(int panelWidth, int buttonWidth,
+                                        int gap) noexcept {
+    const int span = panelWidth - kPagerNumbersDX - kPagerRightInset;
+    const int fit = FittingTabCount(span, buttonWidth, gap);
+    return fit < kPagerMaxButtons ? fit : kPagerMaxButtons;
+}
+
+// 页码按钮的位置只由“上限个数”决定（不足时隐藏多余按钮），避免页数变化时按钮漂移。
+inline constexpr int CenteredPagerNumbersX(int panelWidth, int buttonCount,
+                                           int buttonWidth, int gap) noexcept {
+    const int span = panelWidth - kPagerNumbersDX - kPagerRightInset;
+    if (buttonCount <= 0 || buttonWidth <= 0) return kPagerNumbersDX;
+    const int used = buttonCount * buttonWidth + (buttonCount - 1) * gap;
+    if (used >= span) return kPagerNumbersDX;
+    return kPagerNumbersDX + (span - used) / 2;
+}
 inline constexpr int kGridPitch = 46;
 inline constexpr int kGridHitSize = 47;
 inline constexpr int kGridDefSize = 44;
@@ -128,6 +188,8 @@ inline constexpr int kGridDefDX = 2;
 inline constexpr int kGridDefDY = 1;
 // 分页行：背景底(82+369=451)与状态条之间；状态条沿用扩展底位 441+32=473。
 inline constexpr int kPagerRowY = kGridOriginDY + 369 + 8; // 459：分页行顶
+inline constexpr std::size_t kPagerVisibleButtons = static_cast<std::size_t>(
+    FittingPagerButtons(kPanelWidth, kPagerNumberWidth, kPagerButtonGap)); // 10
 inline constexpr int kStatusTextY = kPanelHeight - 18;    // 505：底部状态条（预留）
 inline constexpr std::size_t kGridColumns = 8;
 // 背包网格行数（8x8=64 格）；与仓库面板分页行数同值但语义不同，单独命名。

@@ -10,18 +10,22 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / 'whui'
+SRC = ROOT / 'whui_src'
 # 出图按 TabKind 枚举规范序（固定），显示顺序由运行期 [WarehouseUI] TabOrder 决定。
 TABS = ['常规', '卷轴', '装备', '头部', '肩部', '项链', '武器',
         '盾牌', '胸甲', '戒指', '靴子', '杂物']
+# round-12：页码按两位数定宽 28x22；两字页签与整理按钮仍是 36x22。
+PAGER_WIDTH, PAGER_HEIGHT = 28, 22
+TIDY_WIDTH, TIDY_HEIGHT = 36, 22
 EXPECTED = {
     **{f'btn_{button}{state}.pcx': ((24, 24) if button == 'close' else (66, 32))
        for button in ('open', 'close', 'take', 'put') for state in range(4)},
-    # round-9：页签收窄到 36x22（两字标题），与页码/整理按钮同宽。
+    # round-9：页签收窄到 36x22（两字标题）；round-12：页码两位数定宽 28x22。
     **{f'tab{tab:02d}{state}.pcx': (36, 22) for tab in range(12) for state in ('n', 's')},
     **{f'arrow_{direction}{state}.pcx': (18, 22)
        for direction in ('prev', 'next') for state in range(2)},
-    'pager_n.pcx': (36, 22),
-    'pager_s.pcx': (36, 22),
+    'pager_n.pcx': (28, 22),
+    'pager_s.pcx': (28, 22),
     'tidy_n.pcx': (36, 22),
     'tidy_s.pcx': (36, 22),
 }
@@ -65,6 +69,61 @@ def decode_pcx(data, size):
     return bytes(rgb)
 
 
+def mirror_tile(patch, width, height):
+    """镜像平铺：与生成器同规则，独立实现以便自建无字底板。"""
+    out = Image.new('RGB', (width, height))
+    tile_w, tile_h = patch.size
+    for oy in range(0, height, tile_h):
+        for ox in range(0, width, tile_w):
+            tile = patch
+            if (ox // tile_w) % 2:
+                tile = tile.transpose(Image.FLIP_LEFT_RIGHT)
+            if (oy // tile_h) % 2:
+                tile = tile.transpose(Image.FLIP_TOP_BOTTOM)
+            out.paste(tile, (ox, oy))
+    return out
+
+
+def scale_brightness(image, factors):
+    """两态亮度：按生成器的 int(v*f + 0.5) 后钳制，不用 Python round（半值取偶会偏）。"""
+    src = image.load()
+    out = Image.new('RGB', image.size)
+    dst = out.load()
+    for y in range(image.height):
+        for x in range(image.width):
+            dst[x, y] = tuple(max(0, min(255, int(src[x, y][i] * factors[i] + 0.5)))
+                              for i in range(3))
+    return out
+
+
+def gold_border(image):
+    """同生成器的 1px 金框：先行写满上下、再列写左右，角点最终由列循环覆盖。"""
+    width, height = image.size
+    px = image.load()
+    for x in range(width):
+        px[x, 0] = (168, 141, 68)
+        px[x, height - 1] = (108, 88, 40)
+    for y in range(height):
+        px[0, y] = (150, 124, 58)
+        px[width - 1, y] = (108, 88, 40)
+
+
+def no_text_plate(width, height, selected):
+    """不导入生成器，从母版 whui_src/bv_ok0.pcx 的 3,3,10,10 7x7 块自建同纹理无字底板。
+
+    页码在 round-12 收窄到 28x22，整理仍是 36x22，两者不再共用同一块底板，
+    所以整理字形差分不能再直接拿 whui/pager_*.pcx 当参照——这里按生成器相同的
+    纹理取样、镜像平铺、亮度取整与金框规则，独立重建 36x22 同纹理无字板。"""
+    with Image.open(SRC / 'bv_ok0.pcx') as master:
+        patch = master.convert('RGB').crop((3, 3, 10, 10))
+    factors = (1.35, 1.32, 1.28) if selected else (0.92, 0.92, 0.92)
+    fill = scale_brightness(mirror_tile(patch, width - 2, height - 2), factors)
+    canvas = Image.new('RGB', (width, height))
+    canvas.paste(fill, (1, 1))
+    gold_border(canvas)
+    return canvas
+
+
 class WarehouseAssetsTest(unittest.TestCase):
     def test_exact_manifest(self):
         self.assertEqual(len(EXPECTED), 48)
@@ -106,9 +165,9 @@ class WarehouseAssetsTest(unittest.TestCase):
                 for name in names:
                     literals[name] = node.value
         self.assertEqual(ast.literal_eval(literals['TABS']), TABS)
-        # 新增整理素材：中文烘焙的两字文案 + 与页码按钮一致的 36x22 尺寸。
+        # 新增整理素材：中文烘焙的两字文案；页码 28x22、整理 36x22 已解耦。
         self.assertEqual(ast.literal_eval(literals['TIDY_TEXT']), '整理')
-        self.assertEqual(ast.literal_eval(literals['PAGER_W']), (36, 22))
+        self.assertEqual(ast.literal_eval(literals['PAGER_W']), (28, 22))
         self.assertEqual(ast.literal_eval(literals['TIDY_W']), (36, 22))
 
         def called_names(function_name):
@@ -156,16 +215,38 @@ class WarehouseAssetsTest(unittest.TestCase):
         self.assertEqual(sorted(names), sorted(TABS),
                          '页签名必须与素材生成器的 12 个标题集合一致')
 
+    def test_reconstructed_plate_matches_pager(self):
+        """自建底板必须与生成器实际出图逐像素一致——否则整理差分参照不可信。
+
+        页码仍是同一条 make_panel_canvas 路径，取 28x22 做交叉验证；通过即证明
+        本文件独立重建的纹理/亮度/金框规则与生产生成器等价。"""
+        for suffix, selected in (('n', False), ('s', True)):
+            with self.subTest(state=suffix):
+                with Image.open(ASSETS / f'pager_{suffix}.pcx') as pager:
+                    produced = pager.convert('RGB')
+                self.assertEqual(produced.size, (PAGER_WIDTH, PAGER_HEIGHT))
+                expected = no_text_plate(PAGER_WIDTH, PAGER_HEIGHT, selected)
+                self.assertEqual(produced.tobytes(), expected.tobytes(),
+                                 '独立重建的底板必须与生产页码出图完全一致')
+
     def test_tidy_assets_share_one_glyph_in_two_inks(self):
-        """两态必须同字形不同墨色：与同底板无文字的 pager 逐像素差分即文字覆盖区。"""
+        """两态必须同字形不同墨色：与独立重建的同底板无文字 36x22 板逐像素差分即文字覆盖区。
+
+        页码 round-12 收窄到 28x22 后，不能再拿 whui/pager_*.pcx 当 36x22 参照
+        （底板必须与 tidy 同尺寸、同纹理，否则尺寸差与纹理差会污染差分结果），
+        故参照板由 no_text_plate() 独立重建——纹理/亮度/金框规则与生成器一致，
+        但不导入生成器，且已由 test_reconstructed_plate_matches_pager 反向核过。"""
         def load(name):
             with Image.open(ASSETS / name) as raw:
                 return raw.convert('RGB')
 
         normal, highlight = load('tidy_n.pcx'), load('tidy_s.pcx')
-        plate_n, plate_s = load('pager_n.pcx'), load('pager_s.pcx')
+        plate_n = no_text_plate(TIDY_WIDTH, TIDY_HEIGHT, False)
+        plate_s = no_text_plate(TIDY_WIDTH, TIDY_HEIGHT, True)
         self.assertEqual(normal.size, (36, 22))
         self.assertEqual(highlight.size, (36, 22))
+        self.assertEqual(plate_n.size, normal.size)
+        self.assertEqual(plate_s.size, highlight.size)
 
         def region(state, plate):
             return frozenset((x, y) for y in range(state.height) for x in range(state.width)
@@ -258,8 +339,14 @@ class WarehouseAssetsTest(unittest.TestCase):
         self.assertIn('name.find("tidy_") == 0', text)
         self.assertNotRegex(text, r'\b46\b')
         for dimensions in ('width = 24; height = 24;', 'width = 66; height = 32;',
-                           'width = 36; height = 22;', 'width = 18; height = 22;'):
+                           'width = 36; height = 22;', 'width = 18; height = 22;',
+                           'width = 28; height = 22;'):
             self.assertIn(dimensions, text)
+        # round-12：页码必须是 28 宽的独立分支，不能落回 36 宽的页签分支。
+        self.assertIn('name.find("pager_") == 0', text)
+        pager_branch = text.index('name.find("pager_") == 0')
+        self.assertIn('width = 28; height = 22;', text[pager_branch:pager_branch + 200],
+                      '页码必须是 28 宽独立分支，不能沿用 36 宽的页签分支')
 
 
 if __name__ == '__main__':

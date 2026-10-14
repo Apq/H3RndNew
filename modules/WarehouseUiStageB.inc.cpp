@@ -19,8 +19,7 @@ static constexpr int kWhUiFrameId_ = 30003;
 static constexpr int kWhUiPanelBackId_ = 30004;
 static constexpr int kWhUiTitleId_ = 30001;
 static constexpr int kWhUiCountId_ = 30002;
-static constexpr int kWhUiPrevId_ = 30050;
-static constexpr int kWhUiNextId_ = 30051;
+// round-12：原分页栏两端箭头 ID 30050/30051 已随用户裁定删除（只留数字页码）。
 static constexpr int kWhUiSlotBase_ = 30100;
 // 64 槽 = 8x8，与 HD 完整背包网格同构（kPageSize 亦为 64）。
 static constexpr int kWhUiSlotCount_ = 64;
@@ -53,7 +52,7 @@ struct WarehouseUiLive_ {
     H3DlgItem* putAllButton = nullptr;
     H3DlgItem* title = nullptr;
     H3DlgText* titleFallback = nullptr;
-    H3DlgText* pagerText[warehouseui::kPagerButtonCount] = {};
+    H3DlgText* pagerText[warehouseui::kPagerMaxButtons] = {};
     H3DlgDef* slots[kWhUiSlotCount_] = {};
     H3DlgItem* panelItems[kWhUiPanelItemCapacity_] = {};
     std::size_t panelItemCount = 0;
@@ -112,10 +111,12 @@ static LoHook* g_wh_ui_post_common_hook_ = nullptr;    // 预留：暂不安装
 static constexpr int kWhUiTabY_ = 54;
 static constexpr int kWhUiTakeAllId_ = 30201;
 static constexpr int kWhUiPutAllId_ = 30202;
-// 分页栏页码按钮（round-7）：30400..30403。
+// 分页栏页码按钮（round-7/12）：30400..30407（上限 8 个，实际可见数按宽度取）。
 static constexpr int kWhUiPagerBase_ = 30400;
-// 整理按钮（round-8）：分页条左侧预留按钮位，仅常规页显示，做存储层排序。
+// 整理按钮（round-8）：分页条左侧预留按钮位，仅常规页签显示，做存储层排序。
 static constexpr int kWhUiOrganizeId_ = 30052;
+// 整理按钮 visible 状态日志去抖（-1 = 未打过）。
+static int g_wh_ui_tidy_logged_ = -1;
 // 布局偏移配置（round-7 用户裁定入配置文件 [WarehouseUI]，两层ini可覆盖）。
 struct WarehouseUiLayoutConfig_ {
     int openDX;    // 仓库按钮距背包界面左上角
@@ -307,18 +308,16 @@ static void WarehouseUiRefresh_(H3BaseDlg* dlg, bool redraw) noexcept
     const warehouseui::PageView view = warehouseui::MakePageView(
         g_wh_ui_live_.filtered.size(), g_wh_ui_live_.page);
     if (g_wh_ui_live_.titleFallback) g_wh_ui_live_.titleFallback->SetText(kWhUiGbkWarehouse_);
-    // 分页栏（round-7）：中间4个动态页码（当前页高亮），两侧箭头按可翻性换态。
+    // 分页栏（round-12）：只显示数字页码，数量按可用宽度取；窗口整块对齐。
     WarehouseUiRefreshPager_(dlg, g_wh_ui_live_.page, pages,
         g_wh_ui_live_.expanded);
-    // 整理按钮（round-8）：仅“常规”页且展开时可见（其余页签 HideDeactivate）。
-    WarehouseUiSetTidyVisible_(dlg, g_wh_ui_live_.expanded
-        && WarehouseUiActiveTab_() == warehouseui::kRegularTab);
     const std::size_t pagerBegin = WarehouseUiPagerBegin_();
-    for (int i = 0; i < warehouseui::kPagerButtonCount; ++i) {
+    const std::size_t pagerVisible = WarehouseUiPagerVisible_();
+    for (int i = 0; i < warehouseui::kPagerMaxButtons; ++i) {
         H3DlgText* number = g_wh_ui_live_.pagerText[i];
         if (!number) continue;
         const std::size_t at = pagerBegin + static_cast<std::size_t>(i);
-        if (at < pages) {
+        if (at < pages && static_cast<std::size_t>(i) < pagerVisible) {
             char text[8];
             _snprintf_s(text, sizeof(text), _TRUNCATE, "%u",
                 static_cast<unsigned>(at + 1));
@@ -353,6 +352,23 @@ static void WarehouseUiRefresh_(H3BaseDlg* dlg, bool redraw) noexcept
     WarehouseUiSetButtonDisabled_(3, putDisabled);
     WarehouseUiSetButtonDisabled_(2, takeDisabled);
     WarehouseUiRefreshTabs_(dlg, false);
+    // 整理按钮（round-8/12）：仅“常规”页签且展开时可见。判定按“页签种类”而不是顺序
+    // 下标——TabOrder 可配置，常规不一定在首位。日志只在状态翻转时打一条，便于实机核对
+    // “按钮存在但没显示”这类问题究竟卡在判定、所有权还是层级。
+    {
+        const bool tidyVisible = warehouseui::TidyVisible(
+            g_wh_ui_live_.expanded, WarehouseUiActiveTabKind_());
+        WarehouseUiSetTidyVisible_(dlg, tidyVisible);
+        if ((tidyVisible ? 1 : 0) != g_wh_ui_tidy_logged_) {
+            g_wh_ui_tidy_logged_ = tidyVisible ? 1 : 0;
+            LogInfo("仓库UI: 整理按钮 visible=%d owns=%d expanded=%d tab=%s pager_begin=%u pager_visible=%u",
+                g_wh_ui_tidy_logged_, WarehouseUiTidyOwned_(dlg) ? 1 : 0,
+                g_wh_ui_live_.expanded ? 1 : 0,
+                warehouseui::TabKindName(WarehouseUiActiveTabKind_()),
+                static_cast<unsigned>(pagerBegin),
+                static_cast<unsigned>(pagerVisible));
+        }
+    }
     // Attach 阶段不重绘，也不让页签刷新重新显示已隐藏的面板控件。
     if (!g_wh_ui_live_.expanded) {
         for (std::size_t i = 0; i < g_wh_ui_live_.panelItemCount; ++i)
@@ -565,17 +581,38 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
             g_wh_ui_live_.layout.warehouse.y + kWhUiTabY_,
             g_wh_ui_live_.layout.warehouse.width - kWhUiTabRowInset_ * 2,
             kWhUiTabHeight_);
-        if (!warehouseui::PointInRect(msg->GetX(), msg->GetY(), row)) return false;
-        const int shift = warehouseui::TabWheelShift(static_cast<int>(msg->subtype));
-        if (shift == 0) return false;
-        const std::size_t before = g_wh_ui_tab_offset_;
-        WarehouseUiTabCommand_(shift < 0 ? 30310 : 30311);
-        if (g_wh_ui_tab_offset_ == before) return false;  // 已到边界：透传
-        WarehouseUiRefresh_(dlg, true);
-        LogInfo("仓库UI: 滚轮滚动页签窗口 delta=%d offset=%u",
-            static_cast<int>(msg->subtype),
-            static_cast<unsigned>(g_wh_ui_tab_offset_));
-        return true;
+        if (warehouseui::PointInRect(msg->GetX(), msg->GetY(), row)) {
+            const int shift = warehouseui::TabWheelShift(static_cast<int>(msg->subtype));
+            if (shift == 0) return false;
+            const std::size_t before = g_wh_ui_tab_offset_;
+            WarehouseUiTabCommand_(shift < 0 ? 30310 : 30311);
+            if (g_wh_ui_tab_offset_ == before) return false;  // 已到边界：透传
+            WarehouseUiRefresh_(dlg, true);
+            LogInfo("仓库UI: 滚轮滚动页签窗口 delta=%d offset=%u",
+                static_cast<int>(msg->subtype),
+                static_cast<unsigned>(g_wh_ui_tab_offset_));
+            return true;
+        }
+        // 分页行滚轮（round-12）：数字页码没有 < > 按钮，滚轮提供逐页翻页的加速通道。
+        // 与页签行互斥（两行矩形不重叠），到边界或无页时透传，不影响原生滚轮路径。
+        const warehouseui::Rect pagerRow(g_wh_ui_live_.layout.warehouse.x
+            + warehouseui::kPagerLeftInset,
+            g_wh_ui_live_.layout.warehouse.y + warehouseui::kPagerRowY,
+            warehouseui::kPanelWidth - warehouseui::kPagerLeftInset * 2,
+            warehouseui::kPagerRowHeight);
+        if (warehouseui::PointInRect(msg->GetX(), msg->GetY(), pagerRow)) {
+            const std::size_t pages = warehouseui::PageCount(
+                g_wh_ui_live_.filtered.size());
+            const std::size_t target = warehouseui::PagerWheelTarget(
+                g_wh_ui_live_.page, pages, static_cast<int>(msg->subtype));
+            if (pages == 0 || target == g_wh_ui_live_.page) return false;
+            g_wh_ui_live_.page = target;
+            WarehouseUiRefresh_(dlg, true);
+            LogInfo("仓库UI: 滚轮翻页 page=%u pages=%u",
+                static_cast<unsigned>(target + 1), static_cast<unsigned>(pages));
+            return true;
+        }
+        return false;
     }
     if (msg->command != eMsgCommand::ITEM_COMMAND)
         return false;
@@ -649,26 +686,16 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
         }
         return true;
     }
-    if (id == kWhUiPrevId_ || id == kWhUiNextId_) {
-        const std::size_t pages = warehouseui::PageCount(
-            g_wh_ui_live_.filtered.size());
-        if (pages != 0) {
-            if (id == kWhUiPrevId_ && g_wh_ui_live_.page > 0)
-                --g_wh_ui_live_.page;
-            if (id == kWhUiNextId_ && g_wh_ui_live_.page + 1 < pages)
-                ++g_wh_ui_live_.page;
-            WarehouseUiRefresh_(dlg, true);
-        }
-        return true;
-    }
-    // 页码直跳（round-7）：30400..30403 对应当前页码窗口的第1..4页。
+    // 页码直跳（round-7/12）：30400..30407 对应当前页码窗口的第 1..8 个页号，点哪个
+    // 就跳到那个绝对页号；两端 < > 箭头已按用户裁定删除，翻块靠点最右侧数字自然前进。
     if (id >= kWhUiPagerBase_
-        && id < kWhUiPagerBase_ + warehouseui::kPagerButtonCount) {
+        && id < kWhUiPagerBase_ + warehouseui::kPagerMaxButtons) {
         const std::size_t pages = warehouseui::PageCount(
             g_wh_ui_live_.filtered.size());
-        const std::size_t at = WarehouseUiPagerBegin_()
-            + static_cast<std::size_t>(id - kWhUiPagerBase_);
-        if (at < pages && at != g_wh_ui_live_.page) {
+        const std::size_t slot = static_cast<std::size_t>(id - kWhUiPagerBase_);
+        const std::size_t at = WarehouseUiPagerBegin_() + slot;
+        if (slot < WarehouseUiPagerVisible_() && at < pages
+            && at != g_wh_ui_live_.page) {
             g_wh_ui_live_.page = at;
             WarehouseUiRefresh_(dlg, true);
         }
@@ -678,11 +705,11 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
         WarehouseUiSetExpanded_(dlg, true, true);
         return true;
     }
-    // 整理按钮（round-8）：只在可见（常规页 + 展开态）时响应；不可见状态下的
-    // 同名点击一律忽略，避免快捷键式误触发。
+    // 整理按钮（round-8/12）：只在可见（常规页签 + 展开态）时响应；不可见状态下的
+    // 同名点击一律忽略，避免快捷键式误触发。判定与显隐共用同一个纯函数。
     if (id == kWhUiOrganizeId_) {
-        if (g_wh_ui_live_.expanded
-            && WarehouseUiActiveTab_() == warehouseui::kRegularTab)
+        if (warehouseui::TidyVisible(g_wh_ui_live_.expanded,
+                WarehouseUiActiveTabKind_()))
             WarehouseUiOrganizeStorage_(dlg);
         return true;
     }
@@ -1041,42 +1068,36 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
         g_wh_ui_live_.slots[i] = slot;
         WarehouseUiAddPanelItem_(dlg, slot);
     }
-    // 分页行（round-7）：两侧箭头按钮 + 中间4个页码按钮，纯数字、无文字。
+    // 分页行（round-12 用户裁定）：去掉两端 < > 箭头，只留数字页码；页码按钮个数按
+    // 可用宽度“能摆几个就几个”，点击直接跳到该页。最左固定给“整理”按钮留位。
+    // 页码按钮按两位数定宽（kPagerNumberWidth），比整理按钮窄。
     const int footerY = layout.warehouse.y + warehouseui::kPagerRowY
         + (warehouseui::kPagerRowHeight - warehouseui::kPagerButtonHeight) / 2;
-    const int pagerTotal = warehouseui::kPagerButtonCount
-        * warehouseui::kPagerButtonWidth
-        + (warehouseui::kPagerButtonCount - 1) * warehouseui::kPagerButtonGap;
-    const int pagerX = layout.warehouse.x
-        + (layout.warehouse.width - pagerTotal) / 2;
-    for (int i = 0; i < warehouseui::kPagerButtonCount; ++i) {
+    const int pagerX = layout.warehouse.x + warehouseui::CenteredPagerNumbersX(
+        warehouseui::kPanelWidth, warehouseui::kPagerMaxButtons,
+        warehouseui::kPagerNumberWidth, warehouseui::kPagerButtonGap);
+    for (int i = 0; i < warehouseui::kPagerMaxButtons; ++i) {
         const int x = pagerX + i
-            * (warehouseui::kPagerButtonWidth + warehouseui::kPagerButtonGap);
+            * (warehouseui::kPagerNumberWidth + warehouseui::kPagerButtonGap);
         const WarehouseTabPair_ pair = WarehouseUiCreatePager_(i, x, footerY,
             kWhUiPagerBase_ + i);
         WarehouseUiAddPanelItem_(dlg, pair.label);
         WarehouseUiAddPanelItem_(dlg, pair.hit);
         // 数字文本 id=0：H3DlgText 不参与命中，点击落在下层透明命中项上。
         H3DlgText* number = H3DlgText::Create(x, footerY,
-            warehouseui::kPagerButtonWidth, warehouseui::kPagerButtonHeight, "",
+            warehouseui::kPagerNumberWidth, warehouseui::kPagerButtonHeight, "",
             NH3Dlg::Text::SMALL, eTextColor::REGULAR, 0,
             eTextAlignment::MIDDLE_CENTER, 0);
         g_wh_ui_live_.pagerText[i] = number;
         WarehouseUiAddPanelItem_(dlg, number);
-    }
-    for (int i = 0; i < 2; ++i) {
-        const WarehouseTabPair_ pair = WarehouseUiCreateFooterArrow_(i,
-            layout.warehouse.x + (i == 0 ? 8 : layout.warehouse.width - 26),
-            footerY, i == 0 ? kWhUiPrevId_ : kWhUiNextId_);
-        WarehouseUiAddPanelItem_(dlg, pair.label);
-        WarehouseUiAddPanelItem_(dlg, pair.hit);
     }
     // 整理按钮（round-8 用户裁定）：分页条左侧预留的按钮位，仅“常规”页显示，
     // 点击对仓库记录做**存储层**排序（不是只重排展示）。位置与其他按钮层级一致，
     // 由 Refresh_ 按当前页签与展开态决定可见性。
     {
         const WarehouseTabPair_ pair = WarehouseUiCreateTidy_(
-            layout.warehouse.x + 8, footerY, kWhUiOrganizeId_);
+            layout.warehouse.x + warehouseui::kPagerLeftInset, footerY,
+            kWhUiOrganizeId_);
         WarehouseUiAddPanelItem_(dlg, pair.label);
         WarehouseUiAddPanelItem_(dlg, pair.hit);
     }

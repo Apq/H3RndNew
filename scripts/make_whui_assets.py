@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""仓库UI（H3RndNew 第六轮）素材生成器。
+"""仓库UI（H3RndNew 第十二轮）素材生成器。
 
 按钮底图严格沿用 H3MegaDesc 的 bv_ok0..3.pcx + bv_frmL.pcx 母版：
 先清除参考图中央勾号，再用九宫格保留金框和原始四态底纹，最后叠加本项目文字。
@@ -9,9 +9,9 @@
   whui/btn_close{0..3}.pcx   24x24  顶部小X
   whui/btn_take{0..3}.pcx    66x32  "一键取出"
   whui/btn_put{0..3}.pcx     66x32  "一键放入"
-  whui/tab{00..11}{n,s}.pcx  44x22  12 个分类页签
+  whui/tab{00..11}{n,s}.pcx  36x22  12 个分类页签
   whui/arrow_{prev,next}{0,1}.pcx 18x22 滚动箭头
-  whui/pager_{n,s}.pcx       36x22  分页页码按钮底图（无文字，数字运行时叠加）
+  whui/pager_{n,s}.pcx       28x22  两位数定宽页码底图（无文字，数字运行时叠加）
   whui/tidy_{n,s}.pcx        36x22  "整理"按钮（中文烘焙，普通/高亮两态）
 
 共 48 张 PCX：btn 16 + tab 24 + arrow 4 + pager 2 + tidy 2。
@@ -35,10 +35,10 @@ OUT = os.path.join(ROOT, "whui")
 BTN_FRAME_KEY = (0, 255, 255)      # bv_frmL.pcx 透明青色
 BTN_W, BTN_H = 66, 32
 CLOSE_W, CLOSE_H = 24, 24
-# round-9：页签标题均为两字，44 收窄到 36（与页码/整理按钮同宽）。
+# 两字页签和整理按钮保持 36x22；页码按一般两位数另用定宽底板。
 TAB_W, TAB_H = 36, 22
 ARROW_W, ARROW_H = 18, 22
-PAGER_W, PAGER_H = 36, 22
+PAGER_W, PAGER_H = 28, 22
 TIDY_W, TIDY_H = 36, 22
 INK_NORMAL = (255, 231, 160)
 INK_HIGHLIGHT = (255, 248, 214)
@@ -294,7 +294,8 @@ def make_tab(text, selected):
 
 def make_pager(selected):
     """分页页码按钮底图：沿用页签构建路径（同参考图纹理、同两态差异、同金框），
-    仅尺寸 36x22 且跳过文字绘制——页码数字由运行时 H3DlgText 叠加。"""
+    round-12 起固定 28x22 两位数定宽并跳过文字绘制——页码数字由运行时 H3DlgText
+    叠加，32x32 原版控制面板没有此控件。"""
     canvas = make_panel_canvas(PAGER_W, PAGER_H, selected)
     gold_border(canvas)
     return canvas
@@ -302,7 +303,8 @@ def make_pager(selected):
 
 def make_tidy(selected):
     """整理按钮：与页签同源构建路径（同参考图纹理底板、同两态亮度差异、同金框），
-    尺寸沿用页码按钮 36x22；文案「整理」直接烘焙进 PCX——游戏字体不保证中文字形。"""
+    尺寸与两字页签一致的 36x22，不再跟随 28x22 的两位焦点页码；文案「整理」直接
+    烘焙进 PCX——游戏字体不保证中文字形。"""
     canvas = make_panel_canvas(TIDY_W, TIDY_H, selected)
     ink = INK_HIGHLIGHT if selected else INK_NORMAL
     stamp_text(canvas, TIDY_TEXT, 13, ink, TIDY_W - 6, dy=-1)

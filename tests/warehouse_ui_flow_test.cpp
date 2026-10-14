@@ -606,16 +606,16 @@ void CheckRound6CallbackAndIcons() {
           "scrolls select def.SpScrArt only when enabled");
     Check(warehouseui::ConsumeWarehouseDown(30201)
               && warehouseui::ConsumeWarehouseDown(30400)
-              && warehouseui::ConsumeWarehouseDown(30403)
+              && warehouseui::ConsumeWarehouseDown(30409)
               && !warehouseui::ConsumeWarehouseDown(1000)
               && warehouseui::ExecutesWarehouseAction(0xD)
               && !warehouseui::ExecutesWarehouseAction(0xC),
           "warehouse and pager controls consume DOWN and commit one CLICK");
-    Check(warehouseui::kPagerButtonCount == 4
-              && warehouseui::kPagerButtonWidth == 36
+    Check(warehouseui::kPagerNumberWidth == 28
+              && warehouseui::kOrganizeButtonWidth == 36
               && warehouseui::kPagerButtonHeight == 22
               && warehouseui::kBackpackGridOriginDY == 50,
-          "round-7 pager geometry and backpack grid origin constants");
+          "round-12 pager geometry and backpack grid origin constants");
 }
 
 // round-11：页签顺序进配置（[WarehouseUI] TabOrder，默认 常规,卷轴,杂物→头部倒序,装备）。
@@ -675,6 +675,82 @@ void CheckRound11TabOrderConfig() {
 // 走查实机定案的分段编码：raw 1..6=头..胸甲(+1)、raw 7=戒指族(单值)、raw 8 起规范
 // 0-based（8=靴子、9..12=杂物1..4、18=杂物5）——第十轮用户实测戒指页=戒指+靴子、
 // 靴子页全是杂物、杂物页空，否定第八轮“均匀 1-based”推断的高段部分。
+// round-12：分页栏只留数字页码（去掉两端箭头），按宽度摆满、点哪页跳哪页；
+// 整理按钮按“页签种类”而不是顺序下标判定（TabOrder 可配置）。
+void CheckRound12PagerRow() {
+    using warehouseui::CenteredPagerNumbersX;
+    using warehouseui::FittingPagerButtons;
+    using warehouseui::kOrganizeButtonWidth;
+    using warehouseui::kPanelWidth;
+    using warehouseui::kPagerButtonGap;
+    using warehouseui::kPagerLeftInset;
+    using warehouseui::kPagerMaxButtons;
+    using warehouseui::kPagerNumberWidth;
+    using warehouseui::kPagerNumbersDX;
+    using warehouseui::kPagerRightInset;
+    using warehouseui::kPagerVisibleButtons;
+    using warehouseui::PagerVisibleCount;
+    using warehouseui::PagerWheelTarget;
+    using warehouseui::PagerWindowBegin;
+    using warehouseui::TabKind;
+    using warehouseui::TidyVisible;
+
+    // 页码按钮按“一般最多两位数”定宽（28），整理按钮两个中文字保持 36；
+    // 分页行左右各留 18px（用户裁定，与页签行同规范）：可用 369px，页码区 329px。
+    Check(kPanelWidth == 405 && kPagerNumberWidth == 28 && kOrganizeButtonWidth == 36
+              && kPagerLeftInset == 18 && kPagerRightInset == 18
+              && kPagerNumbersDX == 58
+              && kPagerMaxButtons == 10 && kPagerVisibleButtons == 10
+              && FittingPagerButtons(405, 28, 4) == 10,
+          "pager row fits 10 two-digit numbers inside the 18px insets");
+    // 页码区 [58, 387]：10*28+9*4 = 316，余 13，左侧居中偏 6 → 起点 64。
+    Check(CenteredPagerNumbersX(405, 10, 28, 4) == 64
+              && CenteredPagerNumbersX(405, 0, 28, 4) == 58
+              && CenteredPagerNumbersX(200, 10, 28, 4) == 58,
+          "pager numbers fill the span right of the organize slot");
+
+    Check(PagerVisibleCount(0, 10) == 0 && PagerVisibleCount(3, 10) == 3
+              && PagerVisibleCount(10, 10) == 10 && PagerVisibleCount(20, 10) == 10
+              && PagerVisibleCount(20, 0) == 0,
+          "pager shows at most as many buttons as fit");
+    // 窗口滑动语义（无箭头时的可达性关键）：当前页在窗口内、窗口不越界、
+    // 前后相邻页都能在同一屏点到（否则会像“整块对齐”那样把首屏锁死）。
+    Check(PagerWindowBegin(0, 10, 20) == 0 && PagerWindowBegin(5, 10, 20) == 0
+              && PagerWindowBegin(6, 10, 20) == 1
+              && PagerWindowBegin(19, 10, 20) == 10
+              && PagerWindowBegin(0, 0, 5) == 0 && PagerWindowBegin(3, 10, 0) == 0
+              && PagerWindowBegin(9, 10, 10) == 0,
+          "pager window slides so both neighbours stay clickable");
+    bool slideOk = true;
+    for (std::size_t pages = 1; pages <= 120 && slideOk; ++pages) {
+        const std::size_t visible = PagerVisibleCount(pages,
+            static_cast<int>(warehouseui::kPagerVisibleButtons));
+        for (std::size_t page = 0; page < pages; ++page) {
+            const std::size_t begin = PagerWindowBegin(page, visible, pages);
+            if (begin + visible > pages || page < begin || page >= begin + visible) {
+                slideOk = false;
+                break;
+            }
+            // 上一页/下一页必须已经显示在窗口里，只靠点数字就能走到任意页。
+            if (page > 0 && page - 1 < begin) { slideOk = false; break; }
+            if (page + 1 < pages && page + 1 >= begin + visible) { slideOk = false; break; }
+        }
+    }
+    Check(slideOk, "every page is reachable by clicking numbers alone (no arrows)");
+    // 分页行滚轮：上滚（subtype>0）= 上一页，下滚 = 下一页；两端与无页时不越界。
+    Check(PagerWheelTarget(5, 10, 1) == 4 && PagerWheelTarget(0, 10, 1) == 0
+              && PagerWheelTarget(0, 10, -1) == 1 && PagerWheelTarget(9, 10, -1) == 9
+              && PagerWheelTarget(3, 0, 1) == 0 && PagerWheelTarget(3, 10, 0) == 3,
+          "pager row wheel steps one page and stops at both ends");
+
+    // 整理按钮：仅展开态 + 常规页签；顺序下标无关（换序后不会跑到别的页签上）。
+    Check(TidyVisible(true, TabKind::Regular)
+              && !TidyVisible(false, TabKind::Regular)
+              && !TidyVisible(true, TabKind::Feet)
+              && !TidyVisible(true, TabKind::Equipment),
+          "organize button follows the active tab kind, not its slot index");
+}
+
 void CheckRound8SlotBaseAndSorting() {
     using warehouseui::NormalizeArtifactTableSlot;
     using warehouseui::SlotTab;
@@ -951,6 +1027,7 @@ void RunWarehouseUiFlowTests_() {
     CheckCatalogFilteringAndScrolling();
     CheckRound8SlotBaseAndSorting();
     CheckRound11TabOrderConfig();
+    CheckRound12PagerRow();
 
     // 置顶仓库层的点击过滤契约（纯函数，离线可回归）：
     using warehouseui::IsNativeBackpackId;
@@ -1013,6 +1090,22 @@ void RunWarehouseUiFlowTests_() {
               && warehouseui::ConsumeWarehouseDown(30052)
               && !warehouseui::IsWarehouseControlId(30005),
           "organize button id 30052 joins the warehouse control set");
+    // round-12：两端分页箭头 ID 30050/30051 已删除，页码按钮区间 30400..30411
+    // （当前实际创建 10 个：30400..30409，区间保留少量余量）。
+    Check(!warehouseui::IsWarehouseControlId(30050)
+              && !warehouseui::IsWarehouseControlId(30051)
+              && warehouseui::IsWarehouseControlId(30400)
+              && warehouseui::IsWarehouseControlId(30409)
+              && warehouseui::IsWarehouseControlId(30411)
+              && !warehouseui::IsWarehouseControlId(30412)
+              && warehouseui::UsesGeometryFallback(30050),
+          "round-12 drops the footer arrow ids and widens the pager id range");
+    // 页码槽位 id 必须落在上面的范围内（kPagerMaxButtons=10 → 30400..30409）。
+    Check(warehouseui::kPagerMaxButtons == 10
+              && 30400 + warehouseui::kPagerMaxButtons - 1 <= 30411
+              && warehouseui::IsWarehouseControlId(30400
+                  + static_cast<int>(warehouseui::kPagerMaxButtons) - 1),
+          "pager slot ids stay inside the warehouse control range");
     // round-8.1（实机回归）：打开按钮在背包面板矩形内，几何兜底必须让位于已知控件。
     Check(!warehouseui::UsesGeometryFallback(30200)
               && !warehouseui::UsesGeometryFallback(30060)
