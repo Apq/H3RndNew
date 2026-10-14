@@ -420,7 +420,7 @@
 - `WarehouseUiButtons.inc.cpp`：`WarehouseUiRefreshButton_` 改读 `flags` 并调 `ButtonVisualStateForPress(b.pressed, (flags & 1) != 0)`；`WarehouseUiUpdateHover_` 的 `hovered` **不再决定底图**，只用来判“光标是否还压在这个按钮上”（按住后移出 = 弹起，原生同语义），且只有按下标记真变了才刷屏（普通悬停不再白刷一帧）。
 - 离线断言加 2 条：`ButtonVisualStateForPress` 真值表（00→0、10/01/11→1）＋“发亮的悬停态在四态通表里依然存在，只是按钮不用它”——把“悬停亮态与按下态是两回事、不能一起砍”这条教训钉在测试里。
 
-**验证（第二次修正）**：`build.bat` + 审计 0 警告 0 错误、15 项 PASS、**UI flow 219 → 221**、PCX 50/290。**部署待办**：验证时游戏正在运行（`Heroes3 HD.exe`，pid 50552），按既有纪律**绝不杀进程**，故本轮未部署——Packs 里仍是第一版 `9DBBEE51…`，新构建 `BF8098A7B84C77A51E5D7C6B1B464C5B9BE342BD163FA9655E9CE8457DF1A465` 待用户关闭游戏后 `deploy.bat`。**用户在实机看到的“焦点还在”正是第一版 DLL 的表现。**
+**验证（第二次修正）**：`build.bat` + 审计 0 警告 0 错误、15 项 PASS、**UI flow 219 → 221**、PCX 50/290。**部署**：修正期间游戏在运行（`Heroes3 HD.exe`，pid 50552），按既有纪律**绝不杀进程**、当时跳过；用户关闭游戏后 `deploy.bat` 退出码 0，Release 与 Packs SHA256 一致 `BF8098A7B84C77A51E5D7C6B1B464C5B9BE342BD163FA9655E9CE8457DF1A465`，whui 50 张在位。**注意：用户在实机看到的“焦点还在、按下没了”是第一版 DLL（`9DBBEE51…`）的表现，第二次修正的 DLL 已覆盖部署。**
 
 #### 第十九轮：五按钮“按下→弹起”一致化 + 原版关闭按钮资源考古（2026-10-14 17:5x 实机报告）
 
