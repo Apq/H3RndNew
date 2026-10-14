@@ -333,6 +333,8 @@
 - **素材与显示顺序解耦**：24 张页签素材固定按 `TabKind` 枚举规范序出图（`tab{枚举值}.pcx`：常规,卷轴,装备,头部,肩部,项链,武器,盾牌,胸甲,戒指,靴子,杂物），显示槽 i 展示 `顺序数组[i]` 对应页签的素材；换序只改配置，不必重出素材。
 - **纯解析器 `ParseTabOrder`**：逗号分隔、容忍分隔符两侧空白；要求恰好 12 个互不相同且合法的页签名，任何缺失/重复/未知名/多余项整体判无效，回退默认并留日志（原始读数与生效顺序各一条）。两层 ini 叠加（user 层可覆盖 default 层），attach 时与布局配置同轮重读，改完 ini 重开弹窗即生效。
 - `kTabOrder` 常量删除，改为 `kDefaultTabOrder`/`kDefaultTabOrderText` + 运行时数组 `g_wh_ui_tab_order_`（ResetTabs_ 复位默认，attach 重读）。
+- **默认键落在随包分发的 `H3RndNew.default.ini`**（`[WarehouseUI] TabOrder=常规,卷轴,杂物,靴子,戒指,胸甲,盾牌,武器,项链,肩部,头部,装备`），玩家改序请写 `H3RndNew.user.ini` 同名键。为避免“ini 里改了没反应”的隐性故障，离线回归新增一致性检查（`test_whui_assets.py::test_tab_order_config_matches_code_default`）：default.ini 的 TabOrder 必须与 `kDefaultTabOrderText` **逐字一致**，且恰好是 12 个互不重复、与素材生成器 TABS 同集合的页签名。
 
 ### 第十一轮验证边界
-2026-10-14 09:2x（源码冻结 35 个 C++ 文件）：`build.bat` + 审计全绿（0 警告 0 错误、13 项 PASS、**UI flow 191**（新增 6 条 TabOrder 解析断言：默认序/自定义排列/重复拒绝/缺失拒绝/多余拒绝/未知拒绝/空拒绝/空白容忍）、PCX 48/282）；素材独立回归 8/8；`deploy.bat` 退出码 0，Release 与 Packs SHA256 均为 `319398B0D2F9C516CAAD73CD13719B67E65642071339A25F77AB1B533056467F`，whui 48 张逐张对拍一致。默认顺序的实际显示与换序生效节奏由用户实机验收；`H3RndNew.default.ini` 不加该键（默认值在代码里，ini 只在用户想改序时写）。
+2026-10-14 09:2x（源码冻结 35 个 C++ 文件）：`build.bat` + 审计全绿（0 警告 0 错误、13 项 PASS、**UI flow 191**（新增 6 条 TabOrder 解析断言：默认序/自定义排列/重复拒绝/缺失拒绝/多余拒绝/未知拒绝/空拒绝/空白容忍）、PCX 48/282）；素材独立回归 **9/9**（第 9 条为上述 ini↔代码↔素材三方一致性）；`deploy.bat` 退出码 0，Release 与 Packs SHA256 均为 `319398B0D2F9C516CAAD73CD13719B67E65642071339A25F77AB1B533056467F`，whui 48 张逐张对拍一致。默认顺序的实际显示与换序生效节奏由用户实机验收。
+补充（09:3x，仅配置与离线回归变动、未重建）：`H3RndNew.default.ini` 加入 `TabOrder` 键后重新 `deploy.bat`，DLL 哈希仍是 `319398B0…6467F`（源码未变），仓库与游戏目录两份 ini 哈希一致。

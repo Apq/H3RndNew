@@ -123,6 +123,39 @@ class WarehouseAssetsTest(unittest.TestCase):
             self.assertIn(f'"tidy_%s.pcx" % suffix', source)
         self.assertIn('make_tidy(selected)', source)
 
+    def test_tab_order_config_matches_code_default(self):
+        """[WarehouseUI] TabOrder 与代码内置默认必须逐字一致，且恰好是 12 个互异页签名。
+
+        运行期解析失败会静默回退默认（只留一条日志），所以打包进包的 ini 与代码默认
+        不一致、或有错别字/重复项，都属于“玩家改了没反应”的隐性故障，必须在离线回归里
+        拦住。三处必须同时一致：default.ini、Catalog.hpp 的 kDefaultTabOrderText、
+        素材生成器的 TABS（规范序）。"""
+        ini = (ROOT / 'H3RndNew.default.ini').read_text(encoding='utf-8')
+        section = None
+        tab_order = None
+        for raw_line in ini.splitlines():
+            line = raw_line.strip()
+            if line.startswith('[') and line.endswith(']'):
+                section = line[1:-1]
+                continue
+            if section == 'WarehouseUI' and line.startswith('TabOrder'):
+                key, _, value = line.partition('=')
+                self.assertEqual(key.strip(), 'TabOrder')
+                tab_order = value.strip()
+        self.assertIsNotNone(tab_order, 'default.ini 的 [WarehouseUI] 必须带 TabOrder')
+
+        header = (ROOT / 'modules/WarehouseUiCatalog.hpp').read_text(encoding='utf-8')
+        match = re.search(r'kDefaultTabOrderText\s*=\s*\n?\s*"([^"]*)"', header)
+        self.assertIsNotNone(match, 'Catalog.hpp 必须有 kDefaultTabOrderText 字面量')
+        self.assertEqual(tab_order, match.group(1),
+                         'default.ini 的 TabOrder 必须与代码内置默认逐字一致')
+
+        names = [name.strip() for name in tab_order.split(',')]
+        self.assertEqual(len(names), 12)
+        self.assertEqual(len(set(names)), 12, '页签名不得重复')
+        self.assertEqual(sorted(names), sorted(TABS),
+                         '页签名必须与素材生成器的 12 个标题集合一致')
+
     def test_tidy_assets_share_one_glyph_in_two_inks(self):
         """两态必须同字形不同墨色：与同底板无文字的 pager 逐像素差分即文字覆盖区。"""
         def load(name):
