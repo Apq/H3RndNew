@@ -554,14 +554,17 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
         WarehouseUiUpdateHover_(dlg, msg);
         return false;
     }
-    // 滚轮（round-9 用户裁定）：仓库展开且光标在页签行（含两端箭头）上时，滚动
-    // 页签窗口。只在实际滚动时消费；行外/已到边界一律透传，不影响原生滚轮路径。
-    // H3 消息层把 WM_MOUSEWHEEL 增量放在 subtype（H3Auto PanelInput 同源实证）。
+    // 滚轮（round-9/9.1 用户裁定）：仓库展开且光标在页签行（含两端箭头，行边距
+    // 18px）上时，滚动页签窗口。只在实际滚动时消费；行外/已到边界一律透传，不
+    // 影响原生滚轮路径。H3 消息层把 WM_MOUSEWHEEL 增量放在 subtype（H3Auto
+    // PanelInput 同源实证）：>0 上滚=窗口左移、<0 下滚。
     if (msg->command == eMsgCommand::MOUSE_WHEEL) {
         if (!g_wh_ui_live_.expanded) return false;
-        const warehouseui::Rect row(g_wh_ui_live_.layout.warehouse.x + 8,
+        const warehouseui::Rect row(g_wh_ui_live_.layout.warehouse.x
+            + kWhUiTabRowInset_,
             g_wh_ui_live_.layout.warehouse.y + kWhUiTabY_,
-            g_wh_ui_live_.layout.warehouse.width - 16, kWhUiTabHeight_);
+            g_wh_ui_live_.layout.warehouse.width - kWhUiTabRowInset_ * 2,
+            kWhUiTabHeight_);
         if (!warehouseui::PointInRect(msg->GetX(), msg->GetY(), row)) return false;
         const int shift = warehouseui::TabWheelShift(static_cast<int>(msg->subtype));
         if (shift == 0) return false;
@@ -993,10 +996,14 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
         if (kind == 2) g_wh_ui_live_.putAllButton = button;
         if (kind == 3) g_wh_ui_live_.takeAllButton = button;
     }
-    // 页签行（round-9 用户裁定）：滚动箭头移到这一行的左右两端，四个可见页签
-    // （36 宽、间距 4）在两箭头之间居中；整行支持滚轮滚动窗口。
-    const int tabRowX = layout.warehouse.x
-        + warehouseui::CenteredTabsX(layout.warehouse.width, kWhUiTabWidth_,
+    // 页签行（round-9/9.1 用户裁定）：滚动箭头在这一行两端、距边 18px；两箭头
+    // 之间“能显示多少页签就显示多少”（36 宽、间距 4，8 个占 316px，余量居中）；
+    // 整行支持滚轮滚动窗口。
+    const int tabInnerStart = kWhUiTabRowInset_ + 18;  // 边距 + 箭头宽
+    const int tabInnerSpan = layout.warehouse.width - tabInnerStart * 2;
+    static_assert(kWhUiTabRowInset_ == 18, "行边距与几何推导保持一致");
+    const int tabRowX = layout.warehouse.x + tabInnerStart
+        + warehouseui::CenteredTabsX(tabInnerSpan, kWhUiTabWidth_,
             kWhUiTabSlotCount_, warehouseui::kPagerButtonGap);
     for (int i = 0; i < kWhUiTabSlotCount_; ++i) {
         const WarehouseTabPair_ pair = WarehouseUiCreateTab_(i,
@@ -1007,7 +1014,9 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
     }
     for (int i = 0; i < 2; ++i) {
         const WarehouseTabPair_ pair = WarehouseUiCreateArrow_(i,
-            layout.warehouse.x + (i == 0 ? 8 : layout.warehouse.width - 26),
+            layout.warehouse.x + (i == 0 ? kWhUiTabRowInset_
+                                         : layout.warehouse.width
+                                             - kWhUiTabRowInset_ - 18),
             layout.warehouse.y + kWhUiTabY_, 30310 + i);
         WarehouseUiAddPanelItem_(dlg, pair.label);
         WarehouseUiAddPanelItem_(dlg, pair.hit);

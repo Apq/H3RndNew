@@ -53,6 +53,13 @@ inline constexpr int CenteredTabsX(int panelWidth, int tabWidth, int slots,
     return (panelWidth - total) / 2;
 }
 
+// round-9.1（用户裁定“能显示多少就显示多少”）：内区宽 span 里能放下多少个
+// tabWidth 宽、间距 gap 的页签。span=333、36 宽、间距 4 → 8 个。
+inline constexpr int FittingTabCount(int span, int tabWidth, int gap) noexcept {
+    if (tabWidth <= 0 || gap < 0 || span < tabWidth) return 0;
+    return (span + gap) / (tabWidth + gap);
+}
+
 // round-9：滚轮 → 页签窗口滚动方向。H3 消息层把 WM_MOUSEWHEEL 的增量放在
 // subtype（H3Auto PanelInput 已实证：>0 上滚、<0 下滚，量级无关）。
 // 上滚=窗口向左（更早的页签），下滚=窗口向右。

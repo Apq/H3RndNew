@@ -10,7 +10,11 @@ namespace {
 static constexpr int kWhUiBtnWidth_ = 66, kWhUiBtnHeight_ = 32;
 // round-9：页签 44→36（标题均为两字），高不变。
 static constexpr int kWhUiTabWidth_ = 36, kWhUiTabHeight_ = 22;
-static constexpr int kWhUiTabSlotCount_ = 4;
+// round-9.1（用户裁定）：两端箭头距边 18px，中间“能放多少放多少”页签。
+// 内区 = 405 - 18*2(边距) - 18*2(箭头) = 333px；36 宽页签 + 4 间距 = 40 步距
+// → FittingTabCount(333,36,4) = 8 个（316px，余 17px 居中），不再留大片空白。
+static constexpr int kWhUiTabSlotCount_ = 8;
+static constexpr int kWhUiTabRowInset_ = 18;
 static constexpr int kWhUiArrowWidth_ = 18, kWhUiArrowHeight_ = 22;
 static constexpr int kWhUiCloseWidth_ = 24, kWhUiCloseHeight_ = 24;
 static constexpr int WarehouseUiButtonWidth_(int kind) noexcept {
@@ -38,7 +42,7 @@ struct WarehouseButtonPair_ {
     H3DlgDefButton* def = nullptr;
 };
 static WarehouseButton_ g_wh_ui_buttons_[4];
-static WarehouseTabPair_ g_wh_ui_tabs_[4], g_wh_ui_arrows_[2];
+static WarehouseTabPair_ g_wh_ui_tabs_[kWhUiTabSlotCount_], g_wh_ui_arrows_[2];
 // 分页栏（round-7）：4 个页码按钮与 2 个底部箭头（与页签行箭头分开存）。
 static WarehouseTabPair_ g_wh_ui_pagers_[warehouseui::kPagerButtonCount];
 static WarehouseTabPair_ g_wh_ui_footer_arrows_[2];
@@ -297,7 +301,8 @@ static void WarehouseUiResetTabs_() noexcept {
 }
 static WarehouseTabPair_ WarehouseUiCreateTab_(int slot, int x, int y, int id) noexcept {
     WarehouseTabPair_ pair;
-    if (!WarehouseUiImagesReady_() || slot < 0 || slot >= 4) return pair;
+    if (!WarehouseUiImagesReady_() || slot < 0 || slot >= kWhUiTabSlotCount_)
+        return pair;
     // round-9（用户裁定）：页签标题都是两个字，44 收窄到 36（与页码/整理按钮同宽）。
     pair.label = WarehouseUiCreateVisual_(x, y, kWhUiTabWidth_, kWhUiTabHeight_, id,
         g_wh_ui_tab_images_[0][0]);
@@ -418,9 +423,10 @@ static void WarehouseUiRefreshPager_(H3BaseDlg* dlg, std::size_t page,
     }
 }
 static void WarehouseUiRefreshTabs_(H3BaseDlg* dlg, bool redraw) noexcept {
-    const auto window = warehouseui::MakeTabWindow(g_wh_ui_tab_offset_, warehouseui::kTabCount, 4);
+    const auto window = warehouseui::MakeTabWindow(g_wh_ui_tab_offset_,
+        warehouseui::kTabCount, static_cast<std::size_t>(kWhUiTabSlotCount_));
     g_wh_ui_tab_offset_ = window.begin;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < kWhUiTabSlotCount_; ++i) {
         const std::size_t at = window.begin + i;
         if (WarehouseUiVisualOwns_(dlg, g_wh_ui_tabs_[i].label) && at < warehouseui::kTabCount)
             g_wh_ui_tabs_[i].label->SetPcx(g_wh_ui_tab_images_[at][at == g_wh_ui_tab_active_ ? 1 : 0]);
@@ -435,11 +441,12 @@ static void WarehouseUiRefreshTabs_(H3BaseDlg* dlg, bool redraw) noexcept {
 }
 static int WarehouseUiTabCommand_(int id) noexcept {
     if (id == 30310 || id == 30311) {
-        g_wh_ui_tab_offset_ = warehouseui::TabOffsetShift(g_wh_ui_tab_offset_, id == 30310 ? -1 : 1,
-            warehouseui::kTabCount, 4);
+        g_wh_ui_tab_offset_ = warehouseui::TabOffsetShift(g_wh_ui_tab_offset_,
+            id == 30310 ? -1 : 1, warehouseui::kTabCount,
+            static_cast<std::size_t>(kWhUiTabSlotCount_));
         return 0;
     }
-    if (id >= 30300 && id < 30304) {
+    if (id >= 30300 && id < 30300 + kWhUiTabSlotCount_) {
         const std::size_t at = g_wh_ui_tab_offset_ + id - 30300;
         if (at >= warehouseui::kTabCount || at == g_wh_ui_tab_active_) return 0;
         g_wh_ui_tab_active_ = static_cast<int>(at);

@@ -544,8 +544,29 @@ void CheckCatalogFilteringAndScrolling() {
               && warehouseui::TabOffsetShift(8, (std::numeric_limits<int>::min)(), 12, 4) == 0
               && warehouseui::TabOffsetShift(8, 1, 12, 0) == 0,
           "tab shift rejects wraparound and handles zero visible slots");
-    const TabKind expectedSlots[] = {
-        TabKind::Head, TabKind::Shoulders, TabKind::Neck, TabKind::Weapon,
+
+    // round-9.1（用户裁定）：两端箭头距边 18px，中间能放多少页签放多少。
+    // 内区 = 405-18*2-18*2 = 333px；36 宽 + 4 间距 → FittingTabCount=8，
+    // 8 个占 316px，CenteredTabsX 在 333 内居中余 17px（左 8 右 9）。
+    Check(warehouseui::FittingTabCount(333, 36, 4) == 8
+              && warehouseui::FittingTabCount(316, 36, 4) == 8
+              && warehouseui::FittingTabCount(315, 36, 4) == 7
+              && warehouseui::FittingTabCount(40, 36, 4) == 1
+              && warehouseui::FittingTabCount(36, 36, 0) == 1
+              && warehouseui::FittingTabCount(35, 36, 4) == 0
+              && warehouseui::CenteredTabsX(333, 36, 8, 4) == 8,
+          "eight 36px tabs fit the 333px inner row and center the 17px rest");
+    const auto window8 = MakeTabWindow(0, warehouseui::kTabCount, 8);
+    Check(window8.begin == 0 && window8.visible == 8 && !window8.canPrev
+              && window8.canNext
+              && MakeTabWindow(99, warehouseui::kTabCount, 8).begin
+                  == warehouseui::kTabCount - 8
+              && warehouseui::TabOffsetShift(0, 1, 12, 8) == 1
+              && warehouseui::TabOffsetShift(4, 1, 12, 8) == 4
+              && warehouseui::TabOffsetShift(4, -1, 12, 8) == 3,
+          "eight-slot tab window clamps to 0..4 over the twelve tabs");
+
+    const TabKind expectedSlots[] = {        TabKind::Head, TabKind::Shoulders, TabKind::Neck, TabKind::Weapon,
         TabKind::Shield, TabKind::Torso, TabKind::Ring, TabKind::Ring,
         TabKind::Feet, TabKind::Misc, TabKind::Misc, TabKind::Misc,
         TabKind::Misc, TabKind::Machine, TabKind::Machine, TabKind::Machine,
