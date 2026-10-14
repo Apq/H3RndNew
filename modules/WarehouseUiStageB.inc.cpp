@@ -54,6 +54,9 @@ struct WarehouseUiLive_ {
     H3DlgText* titleFallback = nullptr;
     H3DlgText* pagerText[warehouseui::kPagerMaxButtons] = {};
     H3DlgDef* slots[kWhUiSlotCount_] = {};
+    // 底部状态条（round-14）：原生 H3DlgTextPcx（HD_TStat.pcx 底 + smalfont.fnt），
+    // 与背包状态条同一构造、同一悬停文案源。
+    H3DlgItem* statusBar = nullptr;
     H3DlgItem* panelItems[kWhUiPanelItemCapacity_] = {};
     std::size_t panelItemCount = 0;
     std::vector<std::size_t> filtered;
@@ -82,6 +85,21 @@ static UINT32 g_wh_ui_shadow_ = 0;
 // sb%04u%04u%1u%1u 是运行时缓存键，实际素材 DiBoxBck.PCX + dialgbox.def。
 using WarehouseSkinFactory_ = H3DlgPcx16* (__fastcall *)(int, int, int, int, int, int, int);
 static WarehouseSkinFactory_ g_wh_ui_skin_factory_ = nullptr;
+// round-14：原生背包状态条的构造链（与 0x039E03..0x039E63 逐参同构）。
+//   H3DlgTextPcx 构造 0x5BCB70 = thiscall(x, y, w, h, text, font, pcx, 1, id, 5, 0)，
+//   对象 0x54 字节先由游戏 new(0x617492, cdecl) 分配；析构由 dialog owned-list 统一
+//   完成（与页签/页码等原生 item 相同），插件不自行 free。
+//   0x10FAA10(item) 是原生悬停路径用的“只刷该 item 屏幕矩形”助手（00603190）。
+//   默认文案 RVA 0x13EA2D 是一个空串（背包状态条初始无字，悬停才填名字）。
+using WarehouseTextPcxFactory_ = H3DlgItem* (__fastcall *)(void* self, void*,
+    int x, int y, int width, int height, const char* text, const char* font,
+    const char* pcx, int a8, int id, int a10, int a11);
+using WarehouseGameNew_ = void* (__cdecl *)(unsigned size);
+using WarehouseStatusRefresh_ = void (__fastcall *)(H3DlgItem* self);
+static WarehouseTextPcxFactory_ g_wh_ui_textpcx_factory_ = nullptr;
+static WarehouseGameNew_ g_wh_ui_game_new_ = nullptr;
+static WarehouseStatusRefresh_ g_wh_ui_status_refresh_ = nullptr;
+static const char* g_wh_ui_status_default_text_ = nullptr;
 
 static constexpr int kWhUiOpenId_ = 30200;
 static constexpr int kWhUiCloseId_ = 30060;
@@ -113,6 +131,10 @@ static constexpr int kWhUiTakeAllId_ = 30201;
 static constexpr int kWhUiPutAllId_ = 30202;
 // 分页栏页码按钮（round-7/12）：30400..30407（上限 8 个，实际可见数按宽度取）。
 static constexpr int kWhUiPagerBase_ = 30400;
+// 状态条（round-14）：H3DlgTextPcx 对象 0x54 字节；ID 只在日志里用（原生文本项
+// 不参与 0x5FF9A0 命中测试，不会以命令 itemId 出现）。
+static constexpr unsigned kWhUiStatusBytes_ = 0x54;
+static constexpr int kWhUiStatusId_ = 30500;
 // 整理按钮（round-8）：分页条左侧预留按钮位，仅常规页签显示，做存储层排序。
 static constexpr int kWhUiOrganizeId_ = 30052;
 // 整理按钮 visible 状态日志去抖（-1 = 未打过）。
@@ -126,8 +148,10 @@ struct WarehouseUiLayoutConfig_ {
     int bulkLeftDX;  // 一键放入距仓库左边
     int bulkRightDX; // 一键取出距仓库右边
     int bulkDY;      // 两个一键按钮距仓库顶部
+    int pagerRowBottomGap; // 分页行（整理+页码）距仓库面板底边的空隙
 };
-static WarehouseUiLayoutConfig_ g_wh_ui_layout_cfg_ = { 8, 18, 0, 0, 8, 8, 50 };
+static WarehouseUiLayoutConfig_ g_wh_ui_layout_cfg_ = {
+    8, 18, 0, 0, 8, 8, 50, warehouseui::kPagerRowBottomGapDefault };
 // round-8：越界不再静默回退默认值（2026-10-14 用户实测 BulkButtonDY 被旧下限
 // 30 静默弃成默认 50），改为就近钳制并记录原始读数；用户给多少就尽量照做。
 static int WarehouseUiClampOffset_(int value, int low, int high) noexcept {
@@ -147,6 +171,8 @@ static void WarehouseUiLoadLayoutConfig_() noexcept {
         raw.bulkLeftDX = IniReadIntUtf8Layered("WarehouseUI", "BulkButtonLeftDX", current.bulkLeftDX);
         raw.bulkRightDX = IniReadIntUtf8Layered("WarehouseUI", "BulkButtonRightDX", current.bulkRightDX);
         raw.bulkDY = IniReadIntUtf8Layered("WarehouseUI", "BulkButtonDY", current.bulkDY);
+        raw.pagerRowBottomGap = IniReadIntUtf8Layered("WarehouseUI",
+            "PagerRowBottomGap", current.pagerRowBottomGap);
         cfg.openDX = WarehouseUiClampOffset_(raw.openDX, 0, 330);
         cfg.openDY = WarehouseUiClampOffset_(raw.openDY, 0, 420);
         cfg.closeDX = WarehouseUiClampOffset_(raw.closeDX, 0, 380);
@@ -154,13 +180,15 @@ static void WarehouseUiLoadLayoutConfig_() noexcept {
         cfg.bulkLeftDX = WarehouseUiClampOffset_(raw.bulkLeftDX, 0, 330);
         cfg.bulkRightDX = WarehouseUiClampOffset_(raw.bulkRightDX, 0, 330);
         cfg.bulkDY = WarehouseUiClampOffset_(raw.bulkDY, 0, 440);
+        cfg.pagerRowBottomGap = WarehouseUiClampOffset_(raw.pagerRowBottomGap,
+            warehouseui::kPagerRowBottomGapMin, warehouseui::kPagerRowBottomGapMax);
         g_wh_ui_layout_cfg_ = cfg;
-        LogInfo("仓库UI: 布局配置 open=%d,%d close=%d,%d bulk=%d,%d,%d",
+        LogInfo("仓库UI: 布局配置 open=%d,%d close=%d,%d bulk=%d,%d,%d pager_gap=%d",
             cfg.openDX, cfg.openDY, cfg.closeDX, cfg.closeDY,
-            cfg.bulkLeftDX, cfg.bulkRightDX, cfg.bulkDY);
-        LogInfo("仓库UI: 布局配置原始读数 open=%d,%d close=%d,%d bulk=%d,%d,%d",
+            cfg.bulkLeftDX, cfg.bulkRightDX, cfg.bulkDY, cfg.pagerRowBottomGap);
+        LogInfo("仓库UI: 布局配置原始读数 open=%d,%d close=%d,%d bulk=%d,%d,%d pager_gap=%d",
             raw.openDX, raw.openDY, raw.closeDX, raw.closeDY,
-            raw.bulkLeftDX, raw.bulkRightDX, raw.bulkDY);
+            raw.bulkLeftDX, raw.bulkRightDX, raw.bulkDY, raw.pagerRowBottomGap);
     } __except (GuardCrashFilter_(GUARD_WH_UI_MODAL, GetExceptionInformation())) {
         // 读取失败保持现值（默认或上次成功值），不阻断接线。
     }
@@ -197,11 +225,16 @@ static void WarehouseUiRebuildFilter_(void) noexcept {
     } catch (...) {
         live.filtered.clear();
     }
-    // 相同道具连续（round-8 用户裁定）：只重排展示顺序，存储顺序与记录下标不变。
-    try {
-        warehouseui::SortRecordIndicesByIdentity(live.filtered, records);
-    } catch (...) {
-        // 排序失败保留未排序视图，不清空已有内容。
+    // 展示排序（round-13 用户裁定）：分类页在筛选结果内保持“相同道具连续”
+    // （round-8）；常规页展示**纯存储顺序**——放入逐个追加到末尾、取出后剩余
+    // 自动前移，任何展示层重排都会让“放入的位置”看起来不对。存储顺序只有
+    // “整理”按钮（存储层排序）能改变。
+    if (warehouseui::TabSortsDisplay(tab)) {
+        try {
+            warehouseui::SortRecordIndicesByIdentity(live.filtered, records);
+        } catch (...) {
+            // 排序失败保留未排序视图，不清空已有内容。
+        }
     }
 }
 
@@ -352,13 +385,15 @@ static void WarehouseUiRefresh_(H3BaseDlg* dlg, bool redraw) noexcept
     WarehouseUiSetButtonDisabled_(3, putDisabled);
     WarehouseUiSetButtonDisabled_(2, takeDisabled);
     WarehouseUiRefreshTabs_(dlg, false);
-    // 整理按钮（round-8/12）：仅“常规”页签且展开时可见。判定按“页签种类”而不是顺序
-    // 下标——TabOrder 可配置，常规不一定在首位。日志只在状态翻转时打一条，便于实机核对
-    // “按钮存在但没显示”这类问题究竟卡在判定、所有权还是层级。
+    // 整理按钮（round-8/13）：仅“常规”页签且展开时可见。判定按“页签种类”而不是顺序
+    // 下标——TabOrder 可配置，常规不一定在首位。round-13 起并入主按钮模型
+    // （原生 H3DlgDefButton 四态 + PCX 视觉），显隐走按钮对的统一路径。
+    // 日志只在状态翻转时打一条，便于实机核对“按钮存在但没显示”究竟卡在判定、
+    // 所有权还是层级。
     {
         const bool tidyVisible = warehouseui::TidyVisible(
             g_wh_ui_live_.expanded, WarehouseUiActiveTabKind_());
-        WarehouseUiSetTidyVisible_(dlg, tidyVisible);
+        WarehouseUiSetButtonVisible_(4, tidyVisible);
         if ((tidyVisible ? 1 : 0) != g_wh_ui_tidy_logged_) {
             g_wh_ui_tidy_logged_ = tidyVisible ? 1 : 0;
             LogInfo("仓库UI: 整理按钮 visible=%d owns=%d expanded=%d tab=%s pager_begin=%u pager_visible=%u",
@@ -554,6 +589,60 @@ static int WarehouseUiBackpackSlotAtPoint_(H3Msg* msg) noexcept
         static_cast<int>(warehouseui::kGridRows), kWhUiSlotCount_);
 }
 
+// 仓库状态条悬停文案（round-14，与原生背包 mouse-over 0x010396BD 分支同构）：
+//  1) 用坐标（不是 msg->itemId）定位仓库槽——原生也是 0x5FF970 现算命中项；
+//  2) 槽内有记录才更新：宝物名取同一个原生宝物表（H3Artifact::GetName →
+//     0x660B68 表 +id*0x20+0），法术卷轴(id==1)按原生 wsprintf "%s. {%s.}"
+//     拼“宝物名. {法术名.}”，法术名取 [0x687FA8]+subtype*0x88+0x10（H3Spell.name）；
+//  3) 更新序列与原生完全相同：SetText(vtable[13]) → Draw(vtable[4]) → 0x10FAA10
+//     只刷该 item 的屏幕矩形；离开物品不清空（背包侧同样保留最后文案）。
+static void WarehouseUiUpdateSlotStatus_(H3BaseDlg* dlg, H3Msg* msg) noexcept {
+    H3DlgItem* bar = g_wh_ui_live_.statusBar;
+    if (!dlg || !msg || !bar || !g_wh_ui_live_.expanded) return;
+    if (g_wh_ui_live_.dialog != dlg) return;
+    const int local = warehouseui::GridSlotFromPoint(msg->GetX(), msg->GetY(),
+        g_wh_ui_live_.layout.warehouse.x + warehouseui::kGridOriginDX,
+        g_wh_ui_live_.layout.warehouse.y + warehouseui::kGridOriginDY,
+        warehouseui::kGridPitch, static_cast<int>(warehouseui::kGridColumns),
+        static_cast<int>(warehouseui::kGridRows), kWhUiSlotCount_);
+    if (local < 0) return;
+    const warehouseui::PageView view = warehouseui::MakePageView(
+        g_wh_ui_live_.filtered.size(), g_wh_ui_live_.page);
+    const std::size_t at = view.begin + static_cast<std::size_t>(local);
+    if (at >= view.begin + view.count || at >= g_wh_ui_live_.filtered.size()) return;
+    const std::size_t recordIndex = g_wh_ui_live_.filtered[at];
+    auto& records = g_warehouse_.heroes[static_cast<std::size_t>(
+        g_wh_ui_live_.hero->id)];
+    if (recordIndex >= records.size() || records[recordIndex].artifactId < 0) return;
+    const warehouse::ArtifactRecord& record = records[recordIndex];
+    const char* artifactName = nullptr;
+    const char* spellName = nullptr;
+    __try {
+        artifactName = H3Artifact(record.artifactId, record.subtype).GetName();
+        if (record.artifactId == warehouseui::kScrollArtifactId
+            && record.subtype >= 0
+            && record.subtype <= warehouseui::kMaxScrollSubtype) {
+            const H3Spell* spells = *reinterpret_cast<H3Spell* const*>(0x687FA8);
+            if (spells) spellName = spells[record.subtype].name;
+        }
+    } __except (GuardCrashFilter_(GUARD_WH_UI_POST_COMMON, GetExceptionInformation())) {
+        return;
+    }
+    char text[512];
+    if (!warehouseui::FormatStatusHint(text, sizeof(text), artifactName, spellName))
+        return;
+    __try {
+        if (!WarehouseUiOwns_(dlg, bar)) return;
+        void** vtable = *reinterpret_cast<void***>(bar);
+        if (!vtable || !vtable[4] || !vtable[13]) return;
+        reinterpret_cast<void(__fastcall*)(H3DlgItem*, void*, const char*)>(
+            vtable[13])(bar, nullptr, text);              // SetText（原生同槽）
+        reinterpret_cast<void(__fastcall*)(H3DlgItem*, void*)>(vtable[4])(
+            bar, nullptr);                                // Draw
+        if (g_wh_ui_status_refresh_) g_wh_ui_status_refresh_(bar);
+    } __except (GuardCrashFilter_(GUARD_WH_UI_POST_COMMON, GetExceptionInformation())) {}
+}
+
 static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
 {
     if (!dlg || !msg || g_wh_ui_live_.dialog != dlg || !g_wh_ui_live_.hero)
@@ -568,6 +657,9 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
     }
     if (msg->command == eMsgCommand::MOUSE_OVER) {
         WarehouseUiUpdateHover_(dlg, msg);
+        // 仓库槽悬停 → 仓库状态条提示（round-14）；背包侧仍走原生 2000..2063
+        // 分支更新原生状态条（ID 777），两条状态条各管各自面板。
+        WarehouseUiUpdateSlotStatus_(dlg, msg);
         return false;
     }
     // 滚轮（round-9/9.1 用户裁定）：仓库展开且光标在页签行（含两端箭头，行边距
@@ -597,7 +689,8 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
         // 与页签行互斥（两行矩形不重叠），到边界或无页时透传，不影响原生滚轮路径。
         const warehouseui::Rect pagerRow(g_wh_ui_live_.layout.warehouse.x
             + warehouseui::kPagerLeftInset,
-            g_wh_ui_live_.layout.warehouse.y + warehouseui::kPagerRowY,
+            g_wh_ui_live_.layout.warehouse.y + warehouseui::PagerRowY(
+                g_wh_ui_layout_cfg_.pagerRowBottomGap),
             warehouseui::kPanelWidth - warehouseui::kPagerLeftInset * 2,
             warehouseui::kPagerRowHeight);
         if (warehouseui::PointInRect(msg->GetX(), msg->GetY(), pagerRow)) {
@@ -686,8 +779,8 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
         }
         return true;
     }
-    // 页码直跳（round-7/12）：30400..30407 对应当前页码窗口的第 1..8 个页号，点哪个
-    // 就跳到那个绝对页号；两端 < > 箭头已按用户裁定删除，翻块靠点最右侧数字自然前进。
+    // 页码直跳（round-7/12）：30400..30409 对应当前页码窗口的第 1..10 个页号，点哪个
+    // 就跳到那个绝对页号；两端 < > 箭头已按用户裁定删除，翻窗靠滑动窗口保证邻页可点。
     if (id >= kWhUiPagerBase_
         && id < kWhUiPagerBase_ + warehouseui::kPagerMaxButtons) {
         const std::size_t pages = warehouseui::PageCount(
@@ -1071,7 +1164,8 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
     // 分页行（round-12 用户裁定）：去掉两端 < > 箭头，只留数字页码；页码按钮个数按
     // 可用宽度“能摆几个就几个”，点击直接跳到该页。最左固定给“整理”按钮留位。
     // 页码按钮按两位数定宽（kPagerNumberWidth），比整理按钮窄。
-    const int footerY = layout.warehouse.y + warehouseui::kPagerRowY
+    const int footerY = layout.warehouse.y + warehouseui::PagerRowY(
+        g_wh_ui_layout_cfg_.pagerRowBottomGap)
         + (warehouseui::kPagerRowHeight - warehouseui::kPagerButtonHeight) / 2;
     const int pagerX = layout.warehouse.x + warehouseui::CenteredPagerNumbersX(
         warehouseui::kPanelWidth, warehouseui::kPagerMaxButtons,
@@ -1091,15 +1185,38 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
         g_wh_ui_live_.pagerText[i] = number;
         WarehouseUiAddPanelItem_(dlg, number);
     }
-    // 整理按钮（round-8 用户裁定）：分页条左侧预留的按钮位，仅“常规”页显示，
-    // 点击对仓库记录做**存储层**排序（不是只重排展示）。位置与其他按钮层级一致，
-    // 由 Refresh_ 按当前页签与展开态决定可见性。
+    // 整理按钮（round-8/13 用户裁定）：分页条左侧预留的按钮位，仅“常规”页显示，
+    // 点击对仓库记录做**存储层**排序（不是只重排展示）。round-13 起与主按钮完全
+    // 同一管线（原生 H3DlgDefButton 吃输入并维护按压/悬停/禁用四态 + PCX 视觉）。
     {
-        const WarehouseTabPair_ pair = WarehouseUiCreateTidy_(
+        const WarehouseButtonPair_ pair = WarehouseUiCreateButton_(4,
             layout.warehouse.x + warehouseui::kPagerLeftInset, footerY,
             kWhUiOrganizeId_);
-        WarehouseUiAddPanelItem_(dlg, pair.label);
-        WarehouseUiAddPanelItem_(dlg, pair.hit);
+        WarehouseUiAddPanelItem_(dlg, pair.visual);
+        WarehouseUiAddPanelItem_(dlg, pair.def);
+    }
+    // 底部状态条（round-14 用户裁定）：背包弹窗自带一条状态条（原生 ID 777，
+    // (8,433) 389x18，HD_TStat.pcx+smalfont.fnt），仓库侧按“同构造、同几何规范、
+    // 同一悬停文案源”补一条，悬停仓库道具时提示与背包完全一致（含文字颜色——
+    // 颜色随 H3DlgTextPcx 构造参数走，不自己另调）。
+    {
+        if (g_wh_ui_textpcx_factory_ && g_wh_ui_game_new_ && g_wh_ui_status_default_text_) {
+            void* memory = g_wh_ui_game_new_(kWhUiStatusBytes_);
+            if (memory) {
+                g_wh_ui_live_.statusBar = g_wh_ui_textpcx_factory_(memory, nullptr,
+                    layout.warehouse.x + warehouseui::kStatusInsetX,
+                    layout.warehouse.y + warehouseui::kStatusTextY,
+                    warehouseui::kStatusWidth, warehouseui::kStatusHeight,
+                    g_wh_ui_status_default_text_, "smalfont.fnt", "HD_TStat.pcx",
+                    1, kWhUiStatusId_, 5, 0);
+            }
+            WarehouseUiAddPanelItem_(dlg, g_wh_ui_live_.statusBar);
+        }
+        LogInfo("仓库UI: 状态条 create=%d id=%d at=(%d,%d) %dx%d",
+            g_wh_ui_live_.statusBar ? 1 : 0, kWhUiStatusId_,
+            layout.warehouse.x + warehouseui::kStatusInsetX,
+            layout.warehouse.y + warehouseui::kStatusTextY,
+            warehouseui::kStatusWidth, warehouseui::kStatusHeight);
     }
     *reinterpret_cast<UINT32*>(reinterpret_cast<BYTE*>(dlg) + 0x70) =
         reinterpret_cast<UINT32>(&WarehouseUiCallback_);
@@ -1203,6 +1320,15 @@ void InstallWarehouseUiStageB_()
     g_wh_ui_scroll_enabled_ = reinterpret_cast<const int*>(base + 0x157FB8);
     g_wh_ui_shadow_ = base + 0x6620; // 完整背包外框阴影（与 0x039A00 构造同一函数）
     g_wh_ui_skin_factory_ = reinterpret_cast<WarehouseSkinFactory_>(base + 0x0FADB0);
+    // round-14：状态条三件套 + 空白默认文案，均取自同一份已审计的 HD_SOD 构建
+    // （StageA 的字节门卫保证构建一致；任一为空则“无状态条”而非崩溃）。
+    g_wh_ui_textpcx_factory_ =
+        reinterpret_cast<WarehouseTextPcxFactory_>(base + 0x005BCB70);
+    g_wh_ui_game_new_ = reinterpret_cast<WarehouseGameNew_>(base + 0x00617492);
+    g_wh_ui_status_refresh_ =
+        reinterpret_cast<WarehouseStatusRefresh_>(base + 0x000FAA10);
+    g_wh_ui_status_default_text_ =
+        reinterpret_cast<const char*>(base + 0x0013EA2D);
     g_wh_ui_modal_hook_ = _PI->WriteLoHook(base + kWhUiModalSiteRva_,
         &OnWarehouseUiModal_);
     g_wh_ui_modal_end_hook_ = _PI->WriteLoHook(base + kWhUiModalEndRva_,

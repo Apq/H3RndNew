@@ -220,6 +220,13 @@ inline constexpr bool TidyVisible(bool expanded, TabKind activeTab) noexcept {
     return expanded && activeTab == TabKind::Regular;
 }
 
+// 展示排序开关（round-13 用户裁定）：分类页在筛选结果内保持“相同道具连续”
+// （round-8 的展示层排序）；常规页展示**纯存储顺序**——放入逐个追加到末尾、
+// 取出后剩余自动前移，不做任何展示层重排（存储顺序只有“整理”能改变）。
+inline constexpr bool TabSortsDisplay(TabKind tab) noexcept {
+    return tab != TabKind::Regular;
+}
+
 } // namespace warehouseui
 
 #endif // H3RNDNEW_WAREHOUSE_UI_CATALOG_HPP

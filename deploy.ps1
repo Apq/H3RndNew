@@ -13,7 +13,7 @@ $packsDst = "$gameDir\_HD3_Data\Packs\热血插件"
 $src = "$PSScriptRoot\Release"
 
 try {
-    # 在创建目标目录、复制DLL或任何素材之前，校验全部源文件和精确48项清单。
+    # 在创建目标目录、复制DLL或任何素材之前，校验全部源文件和精确50项清单。
     $dll = Join-Path $src 'H3RndNew.dll'
     $sourceFiles = @($dll, "$PSScriptRoot\H3RndNew.default.ini", "$PSScriptRoot\使用说明.txt")
     foreach ($sourceFile in $sourceFiles) {
@@ -26,24 +26,24 @@ try {
         foreach ($button in @('open', 'close', 'take', 'put')) {
             foreach ($state in 0..3) { "btn_$button$state.pcx" }
         }
+        foreach ($state in 0..3) { "tidy$state.pcx" }
         foreach ($tab in 0..11) {
             foreach ($state in @('n', 's')) { 'tab{0:00}{1}.pcx' -f $tab, $state }
         }
         'arrow_prev0.pcx'; 'arrow_prev1.pcx'; 'arrow_next0.pcx'; 'arrow_next1.pcx'
         'pager_n.pcx'; 'pager_s.pcx'
-        'tidy_n.pcx'; 'tidy_s.pcx'
     )
     $assets = @(Get-ChildItem -LiteralPath $uiAssets -Filter '*.pcx' -File)
     $assetNames = @($assets | ForEach-Object { $_.Name })
-    if ($assets.Count -ne 48 -or @(Compare-Object $expectedAssets $assetNames).Count -ne 0) {
-        throw "仓库UI素材清单不匹配：期望48个指定PCX，实际$($assets.Count)"
+    if ($assets.Count -ne 50 -or @(Compare-Object $expectedAssets $assetNames).Count -ne 0) {
+        throw "仓库UI素材清单不匹配：期望50个指定PCX，实际$($assets.Count)"
     }
 
     New-Item -ItemType Directory -Path $packsDst -Force | Out-Null
     foreach ($sourceFile in $sourceFiles) { Copy-Item -LiteralPath $sourceFile -Destination $packsDst -Force }
     $uiDst = Join-Path $packsDst 'whui'
     New-Item -ItemType Directory -Path $uiDst -Force | Out-Null
-    foreach ($staleName in @('title.pcx', 'tab12n.pcx', 'tab12s.pcx', 'tab13n.pcx', 'tab13s.pcx')) {
+    foreach ($staleName in @('title.pcx', 'tab12n.pcx', 'tab12s.pcx', 'tab13n.pcx', 'tab13s.pcx', 'tidy_n.pcx', 'tidy_s.pcx')) {
         $staleAsset = Join-Path $uiDst $staleName
         if (Test-Path -LiteralPath $staleAsset) {
             $resolvedAsset = (Resolve-Path -LiteralPath $staleAsset).Path

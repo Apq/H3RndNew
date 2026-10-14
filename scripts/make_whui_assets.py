@@ -12,9 +12,9 @@
   whui/tab{00..11}{n,s}.pcx  36x22  12 个分类页签
   whui/arrow_{prev,next}{0,1}.pcx 18x22 滚动箭头
   whui/pager_{n,s}.pcx       28x22  两位数定宽页码底图（无文字，数字运行时叠加）
-  whui/tidy_{n,s}.pcx        36x22  "整理"按钮（中文烘焙，普通/高亮两态）
+  whui/tidy{0..3}.pcx        36x22  "整理"按钮（四态，与主按钮同一管线）
 
-共 48 张 PCX：btn 16 + tab 24 + arrow 4 + pager 2 + tidy 2。
+共 50 张 PCX：btn 16 + tab 24 + arrow 4 + pager 2 + tidy 4。
 
 用法：
     pythonw scripts/make_whui_assets.py        # 在 H3RndNew 目录下执行
@@ -301,14 +301,16 @@ def make_pager(selected):
     return canvas
 
 
-def make_tidy(selected):
-    """整理按钮：与页签同源构建路径（同参考图纹理底板、同两态亮度差异、同金框），
-    尺寸与两字页签一致的 36x22，不再跟随 28x22 的两位焦点页码；文案「整理」直接
-    烘焙进 PCX——游戏字体不保证中文字形。"""
-    canvas = make_panel_canvas(TIDY_W, TIDY_H, selected)
-    ink = INK_HIGHLIGHT if selected else INK_NORMAL
-    stamp_text(canvas, TIDY_TEXT, 13, ink, TIDY_W - 6, dy=-1)
-    gold_border(canvas)
+def make_tidy(state):
+    """整理按钮（round-13 用户裁定）：与“一键取出/放入”完全同一管线——同四态
+    bv_ok 母版清勾九宫格 + 参考金框 + 状态墨色 + 按压态文字下移 1px，只是尺寸
+    36x22 放进分页栏。文案「整理」烘焙进 PCX（游戏字体不保证中文字形）。"""
+    state_index = STATE_ORDER.index(state)
+    canvas = apply_reference_frame(nine_slice(clean_ok_base(state_index), TIDY_W, TIDY_H))
+    ink = {"normal": INK_NORMAL, "highlight": INK_HIGHLIGHT,
+           "pressed": INK_PRESSED, "disabled": INK_DISABLED}[state]
+    stamp_text(canvas, TIDY_TEXT, 13, ink, TIDY_W - 6,
+               dy=1 if state == "pressed" else 0)
     return canvas
 
 
@@ -362,6 +364,12 @@ def main():
         save_pcx(im, "btn_close%d.pcx" % index)
         preview_cells.append(im)
 
+    # 整理四态与主按钮同块摆放（preview 前排每行 4 列都是按钮态）。
+    for index, state in enumerate(STATE_ORDER):
+        im = make_tidy(state)
+        save_pcx(im, "tidy%d.pcx" % index)
+        preview_cells.append(im)
+
     for index, title in enumerate(TABS):
         for suffix, selected in (("n", False), ("s", True)):
             im = make_tab(title, selected)
@@ -379,24 +387,21 @@ def main():
         save_pcx(im, "pager_%s.pcx" % suffix)
         preview_cells.append(im)
 
-    for suffix, selected in (("n", False), ("s", True)):
-        im = make_tidy(selected)
-        save_pcx(im, "tidy_%s.pcx" % suffix)
-        preview_cells.append(im)
-
-    # 所有按钮统一每行4列（normal/pressed/highlight/disabled）。
+    # 所有按钮统一每行4列（normal/pressed/highlight/disabled）；非按钮素材
+    # （页签/箭头/页码）从按钮块整行数之后继续 4 列排，避免覆盖最后一行按钮。
     scale = 3
     cell_w = (BTN_W + 8) * scale
     cell_h = (BTN_H + 8) * scale
-    sheet_rows = (len(preview_cells) + 3) // 4
+    button_count = (len(buttons) + 2) * len(STATE_ORDER)  # 文本按钮+关闭+整理
+    button_rows = (button_count + 3) // 4
+    sheet_rows = button_rows + (len(preview_cells) - button_count + 3) // 4
     sheet = Image.new("RGB", (cell_w * 4, cell_h * sheet_rows), (48, 48, 66))
-    button_count = len(buttons) * len(STATE_ORDER) + len(STATE_ORDER)
     for i, im in enumerate(preview_cells):
         big = im.resize((im.size[0] * scale, im.size[1] * scale), Image.NEAREST)
         if i < button_count:
             col, row = i % 4, i // 4
         else:
-            col, row = (i - button_count) % 4, 4 + (i - button_count) // 4
+            col, row = (i - button_count) % 4, button_rows + (i - button_count) // 4
         sheet.paste(big, (col * cell_w + 4, row * cell_h + 4))
     preview = os.path.join(OUT, "preview.png")
     sheet.save(preview)

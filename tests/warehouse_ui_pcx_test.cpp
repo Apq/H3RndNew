@@ -288,9 +288,12 @@ void CheckRealAssets_()
     names.push_back("arrow_next1.pcx");
     names.push_back("pager_n.pcx");
     names.push_back("pager_s.pcx");
-    names.push_back("tidy_n.pcx");
-    names.push_back("tidy_s.pcx");
-    Check_(names.size() == 48, "48 warehouse PCX names listed");
+    // round-13：整理按钮四态（与主按钮同一管线），文件名 tidy0..tidy3。
+    names.push_back("tidy0.pcx");
+    names.push_back("tidy1.pcx");
+    names.push_back("tidy2.pcx");
+    names.push_back("tidy3.pcx");
+    Check_(names.size() == 50, "50 warehouse PCX names listed");
 
     std::size_t nonEmpty = 0;
     for (const std::string& name : names) {
@@ -308,7 +311,8 @@ void CheckRealAssets_()
         } else if (name.find("pager_") == 0) {
             // round-12：页码按一般两位数定宽，与 36x22 的页签/整理解耦。
             width = 28; height = 22;
-        } else if (name.find("tidy_") == 0) {
+        } else if (name.find("tidy") == 0) {
+            // round-13：整理并入主按钮四态管线，仍是 36x22。
             width = 36; height = 22;
         } else {
             width = 18; height = 22;
@@ -330,7 +334,7 @@ void CheckRealAssets_()
         Check_(hasNonZero && hasMultipleColors, "warehouse PCX has color distribution");
         ++nonEmpty;
     }
-    Check_(nonEmpty == 48, "all 48 warehouse PCX files decoded");
+    Check_(nonEmpty == 50, "all 50 warehouse PCX files decoded");
 }
 
 } // namespace
@@ -340,6 +344,6 @@ void RunWarehouseUiPcxTests_()
     CheckFixtureDecoding_();
     CheckFailureFixtures_();
     CheckRealAssets_();
-    std::printf("PASS warehouse UI PCX: 48 assets and malformed-stream gates (%d checks)\n",
+    std::printf("PASS warehouse UI PCX: 50 assets and malformed-stream gates (%d checks)\n",
                 g_checks_);
 }

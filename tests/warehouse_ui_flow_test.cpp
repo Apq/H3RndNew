@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <vector>
 
@@ -751,6 +752,78 @@ void CheckRound12PagerRow() {
           "organize button follows the active tab kind, not its slot index");
 }
 
+// round-13：常规页展示纯存储顺序（放入追加到末尾、取出后剩余前移），分类页
+// 保留“相同道具连续”的展示排序（只在筛选结果内）；存储顺序只有“整理”能改。
+// 分页行距面板底边的空隙入配置，默认上移 5px（行顶 459→454）。
+void CheckRound13OrderPolicy() {
+    using warehouseui::kPagerRowBottomGapDefault;
+    using warehouseui::kPagerRowBottomGapMax;
+    using warehouseui::kPagerRowBottomGapMin;
+    using warehouseui::kPagerRowHeight;
+    using warehouseui::kPagerRowY;
+    using warehouseui::PagerRowY;
+    using warehouseui::TabKind;
+    using warehouseui::TabSortsDisplay;
+    Check(!TabSortsDisplay(TabKind::Regular),
+          "regular tab shows pure storage order (no display-layer sort)");
+    bool categoryTabsSort = true;
+    for (int t = 1; t < 12; ++t)
+        categoryTabsSort = categoryTabsSort
+            && TabSortsDisplay(static_cast<TabKind>(t));
+    Check(categoryTabsSort,
+          "every category tab keeps the same-item-adjacent display sort");
+    // 默认 37（旧固定位置隐含 32，用户裁定上移 5px）；钳制范围 [18,40]：下限保证
+    // 分页行底不会压到底部状态条（kStatusTextY），上限贴住背包网格底。
+    Check(kPagerRowBottomGapDefault == 37 && kPagerRowY == 454
+              && PagerRowY(37) == 454 && PagerRowY(32) == 459
+              && PagerRowY(kPagerRowBottomGapMin) == 473
+              && PagerRowY(kPagerRowBottomGapMax) == 451
+              && kPagerRowBottomGapMin == 18 && kPagerRowBottomGapMax == 40,
+          "pager row bottom gap defaults to 37 (5px up from the old 459) and clamps 18..40");
+    // round-14：底部状态条与分页行的共存边界（最小值时分页行底正好贴住状态条顶）。
+    Check(warehouseui::kStatusTextY == 505 && warehouseui::kStatusInsetX == 8
+              && warehouseui::kStatusWidth == 389 && warehouseui::kStatusHeight == 18
+              && PagerRowY(kPagerRowBottomGapMin) + kPagerRowHeight
+                  == warehouseui::kStatusTextY
+              && warehouseui::kStatusTextY + warehouseui::kStatusHeight
+                  == warehouseui::kPanelHeight,
+          "status bar sits on the panel bottom and never overlaps the pager row");
+}
+
+void CheckRound14StatusBar() {
+    using warehouseui::FormatStatusHint;
+    char text[64] = {};
+    // 普通宝物：只有名字。
+    Check(FormatStatusHint(text, sizeof(text), "Sword of Judgement", nullptr)
+              && std::strcmp(text, "Sword of Judgement") == 0,
+          "plain artifact hover shows the artifact name alone");
+    // 法术卷轴：原生 wsprintf "%s. {%s.}" 同款文本。
+    Check(FormatStatusHint(text, sizeof(text), "Spell Scroll", "Fireball")
+              && std::strcmp(text, "Spell Scroll. {Fireball.}") == 0,
+          "spell scroll hover matches the native \"%s. {%s.}\" status text");
+    // 空法术名/空宝物名：不产生“名. {.}”这类残缺文案。
+    Check(FormatStatusHint(text, sizeof(text), "Spell Scroll", "")
+              && std::strcmp(text, "Spell Scroll") == 0,
+          "empty spell name degrades to the plain artifact name");
+    Check(!FormatStatusHint(text, sizeof(text), nullptr, "Fireball")
+              && text[0] == '\0',
+          "missing artifact name shows nothing (status bar keeps its last text)");
+    Check(!FormatStatusHint(text, sizeof(text), "", "Fireball") && text[0] == '\0',
+          "empty artifact name shows nothing");
+    // 容量边界：截断必须仍然以 NUL 结尾，绝不越界写。
+    char small[12] = {};
+    Check(FormatStatusHint(small, sizeof(small), "Sword of Judgement", nullptr)
+              && std::strlen(small) == 11 && small[11] == '\0',
+          "status text is truncated to capacity and stays NUL-terminated");
+    char tiny[4] = {};
+    Check(FormatStatusHint(tiny, sizeof(tiny), "Spell Scroll", "Fireball")
+              && std::strlen(tiny) == 3,
+          "scroll hint also respects a tiny capacity");
+    Check(!FormatStatusHint(nullptr, 8, "Sword of Judgement", nullptr)
+              && !FormatStatusHint(text, 0, "Sword of Judgement", nullptr),
+          "null buffer or zero capacity is rejected instead of written");
+}
+
 void CheckRound8SlotBaseAndSorting() {
     using warehouseui::NormalizeArtifactTableSlot;
     using warehouseui::SlotTab;
@@ -780,7 +853,7 @@ void CheckRound8SlotBaseAndSorting() {
           "head/shoulders/neck/torso/ring/feet/misc land on the tabs the user "
           "verified in three observation rounds");
 
-    // 相同道具必须连续（展示层）。
+    // 分类页的展示排序（round-8 保留）：相同道具连续（只重排展示，不动存储）。
     State state;
     state.heroes[4] = {{42, 0}, {7, 0}, {42, 0}, {1, 9}, {7, 0}, {1, 3}, {42, 0}};
     std::vector<std::size_t> order;
@@ -1028,6 +1101,8 @@ void RunWarehouseUiFlowTests_() {
     CheckRound8SlotBaseAndSorting();
     CheckRound11TabOrderConfig();
     CheckRound12PagerRow();
+    CheckRound13OrderPolicy();
+    CheckRound14StatusBar();
 
     // 置顶仓库层的点击过滤契约（纯函数，离线可回归）：
     using warehouseui::IsNativeBackpackId;

@@ -355,3 +355,26 @@
 
 ### 第十二轮验证边界
 2026-10-14 11:0x（源码冻结 35 个 C++ 文件）：`build.bat` + 审计全绿（0 警告 0 错误、13 项 PASS、**UI flow 200**、PCX 48/282）；素材独立回归 **10/10**（tidy 字形差分改用测试内自建 36x22 无字底板，且新增“自建底板与 28x22 pager 逐像素相等”交叉证明）；46 张素材哈希不变，仅 `pager_n/s.pcx` 与 `preview.png` 变化。`deploy.bat` 退出码 0，Release 与 Packs SHA256 一致，whui 48 张逐张对拍一致。整理按钮实际显示、页码点击跳页/滚轮翻页与 18px 边距观感由用户实机验收；若整理仍未显示，翻转日志可直接区分判定/所有权/层级。
+
+## 2026-10-14 第十三轮：常规页不排序 + 整理并入主按钮四态 + 分页行距底边入配置
+
+用户实机三条裁定：1）放入仓库“看起来自动排序了”不对——正确语义是移出时剩余前移、移入时逐个加到空位（事务层 round-8 起本就如此：Deposit 追加到记录末尾并把背包压缩到前部、Retrieve 取首个空背包位并压缩仓库记录）；真凶是**展示层**每次重建都对 filtered 按 (宝物ID,子类型) 重排。2）**常规页以外的页排序是对的（只在筛选结果内）**——即分类页保留“同类相邻”，常规页展示纯存储顺序；用新纯函数 `TabSortsDisplay(tab) = tab != Regular` 门控（Catalog.hpp），存储顺序此后只有“整理”按钮能改。3）**整理按钮的视觉效果要与两个一键按钮同款，不另发明**——废除 tidy 专用 PCX+透明命中+自管 hover 的做法，把它并入主按钮数组第 5 个：原生 `H3DlgDefButton`（吃输入、维护按压/禁用状态位）+ 同坐标 PCX 视觉件 + 换 vtable Draw 按四态换底图，素材从 `tidy_{n,s}` 2 态扩为 `tidy0..3` 4 态（与主按钮同一生成管线：bv_ok 清勾九宫格+参考金框+状态墨色+按压下移 1px），悬停/按压/禁用全部走既有 `WarehouseUiUpdateHover_/RefreshButton_` 路径。追加：**分页行距面板底边的空隙入配置** `[WarehouseUI] PagerRowBottomGap`（整理+页码整行移动），默认 37（旧固定位置隐含 32，上移 5px），钳制 8..40，就近钳制并打 raw/生效双日志；纯函数 `PagerRowY(gap)=523-gap-32`。
+
+实现要点：素材清单 **48→50**（deploy/pack 精确清单、加载器、PCX 测试、python 断言全链同步，deploy 顺带清理游戏目录旧 `tidy_n/s.pcx`）；python 回归 10→**11**（新增 `test_pager_row_gap_config_matches_code_default`：ini 默认 == Flow.hpp 字面量 == 钳制区间内；tidy 字形差分改走“导入生成器重建无字底板”验证 make_tidy 只叠文字、四态同字形、按压整体下移 1px）；preview 拼版改“非按钮素材从按钮整行数之后起排”（888x1560，旧公式在按钮块占满第 4 行时会覆盖 tidy 行）。整理按钮显隐沿用 `WarehouseUiSetButtonVisible_(4, TidyVisible(...))`（视觉件+原生命中按钮同步 Show/Hide），翻转日志保留。
+
+### 第十三轮验证边界
+2026-10-14 12:0x（源码冻结 35 个 C++ 文件）：`build.bat` + 审计全绿（0 警告 0 错误、13 项 PASS、**UI flow 203**、**PCX 50/290**）；素材独立回归 **11/11**；`deploy.bat` 退出码 0，Release 与 Packs SHA256 一致（`618A64393D1C930DBB647B7C1BC37128C96C8CBE862B7C6456408391CCDFF6EB`），whui 50 张逐张对拍一致，游戏目录旧 `tidy_n/s.pcx` 已清理，`H3RndNew.default.ini` 双侧一致（新增 `PagerRowBottomGap=37`）。常规页放入/取出顺序、分类页同类相邻、整理四态视觉（悬停/按压/禁用）、分页行上移 5px 及配置改动的实际观感由用户实机验收。
+
+## 2026-10-14 第十四轮：仓库状态条（悬停提示与背包同款，含文字颜色）
+
+用户实机裁定：背包界面自带底部状态条（悬停道具时显示提示），仓库也要有一条，且**移到道具上时提示文字与背包一致（包括文字颜色）**。逆向取证（走查 0x010395D0 callback 全码 + 构造码 0x01039DFF，只读 HD_SOD.dll，RVA 见 H3Note 完整背包笔记）：
+
+- **原生状态条本体**：`new(0x54)` + **H3DlgTextPcx 构造 0x5BCB70(thiscall)**，参数字面序 `(x+8, y+433, 389, 18, "", "smalfont.fnt", "HD_TStat.pcx", 1, 777, 5, 0)`；默认文案 RVA 0x13EA2D 是**空串**（初始无字）；指针存 `dlg+0x74`。文字颜色/字体随 H3DlgTextPcx 构造参数走——**仓库条照抄同构造即天然同色同字体，不自己另调色**。
+- **原生悬停分支**（command==4）：`0x5FF970` 按坐标取命中项 id ∈ [2000,2064] → `artifactId = hero+0x1D4+(id-2000)*8`；**普通宝物**名=表 `[0x660B68]→+id*0x20+0`；**法术卷轴**(id==1)=`wsprintf("%s. {%s.}", 宝物名, 法术名)`（RVA 0x142658），法术名=`[0x687FA8]+subtype*0x88+0x10`（H3Spell.name）；然后 `状态条->SetText(vtable[13]) → Draw(vtable[4]) → 0x10FAA10(item)` 只刷该 item 屏幕矩形（→00603190）。**离开物品不清空**（枝条保留最后文案）。
+- **实现**（WarehouseUiStageB）：新增三个原生工厂指针（Install 时随 StageA 字节门卫同批解析：构造 0x5BCB70 / 分配 0x617492 / 刷新 0xFAA10）+ 空白默认文案 0x13EA2D；attach 时在整理按钮之后按同构造在 `(仓库面板原点+8, +505, 389, 18)` 创建仓库状态条（ID 30500 仅日志用——H3DlgText 不参与命中测试），`AddPanelItem_` 走既有生命周期（展开显/收起隐，析构由 dialog owned-list 统一完成）。
+- **悬停接线**：`MOUSE_OVER` 分支新增 `WarehouseUiUpdateSlotStatus_`——**用坐标定位仓库槽**（与原生同样不用 msg->itemId）：`GridSlotFromPoint` 命中且有记录 → `H3Artifact(id,subtype).GetName()`（同一原生宝物表）+ 卷轴 `H3Spell` 同款拼接（纯函数 `FormatStatusHint`）→ `SetText/Draw/Refresh` 同序列更新；**背包侧悬停仍走原生 2000..2063 分支更新原生状态条，两条状态条各管各自面板**；空槽/离开不做任何更新（与背包语义完全一致）。
+- **与分页行的边界**：状态条固定在底边 18px 高，分页行 `PagerRowBottomGap` 钳制由 [8,40] 收紧为 **[18,40]**（row bottom = 523-gap 必须 ≤ 505；最小值时分页行底正好贴住状态条顶，static_assert 锁死）；ini 注释同步。
+- 离线回归：`CheckRound14StatusBar` 覆盖文案拼接（普通/卷轴/空名/截断/容量拒绝/空法术名退化）与几何共存边界；UI flow 203→**212**；python 回归无需改素材（无新素材）保持 **11/11**（`PagerRowBottomGap` 一致性断言仍满足 18≤37≤40）。
+
+### 第十四轮验证边界
+2026-10-14 12:1x（源码冻结 35 个 C++ 文件）：`build.bat` + 审计全绿（0 警告 0 错误、13 项 PASS、**UI flow 212**、PCX 50/290）；素材独立回归 11/11（同轮含第 13 轮的 `PagerRowBottomGap` 一致性断言）；`deploy.bat` 退出码 0，Release 与 Packs SHA256 均为 `B13D24C34847E89412A39F6E16989CBF2F3F1C07468570E424DB94194D3D6904`，whui 50 张逐张对拍一致，ini 双侧一致。仓库状态条实际显示、悬停提示与背包逐字同款（含颜色）、离开保留文案、分页行配置边界的实机观感由用户验收。

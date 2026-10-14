@@ -186,11 +186,58 @@ inline constexpr int kGridHitSize = 47;
 inline constexpr int kGridDefSize = 44;
 inline constexpr int kGridDefDX = 2;
 inline constexpr int kGridDefDY = 1;
-// 分页行：背景底(82+369=451)与状态条之间；状态条沿用扩展底位 441+32=473。
-inline constexpr int kPagerRowY = kGridOriginDY + 369 + 8; // 459：分页行顶
+// 分页行距面板底边的空隙（round-13 用户裁定入配置 [WarehouseUI]
+// PagerRowBottomGap，整理按钮与页码数字整行一起移动）。旧版隐含 32（行顶
+// 459=82+369+8），用户实测“过低了点”→ 默认上移 5px 即 37（行顶 454）。
+// 钳制 [18,40]：row bottom = 523-gap 必须不越过底部状态条顶（kStatusTextY=505），
+// 即 gap ≥ 18；上限 40 = 贴住背包网格底（行顶 451）。
+inline constexpr int kPagerRowBottomGapDefault = 37;
+inline constexpr int kPagerRowBottomGapMin = 18;
+inline constexpr int kPagerRowBottomGapMax = 40;
+inline constexpr int PagerRowY(int bottomGap) noexcept {
+    return kPanelHeight - bottomGap - kPagerRowHeight;
+}
+// 默认配置下的分页行顶（454），供纯断言与文档引用；运行期取
+// PagerRowY(g_wh_ui_layout_cfg_.pagerRowBottomGap)。
+inline constexpr int kPagerRowY = PagerRowY(kPagerRowBottomGapDefault);
 inline constexpr std::size_t kPagerVisibleButtons = static_cast<std::size_t>(
     FittingPagerButtons(kPanelWidth, kPagerNumberWidth, kPagerButtonGap)); // 10
-inline constexpr int kStatusTextY = kPanelHeight - 18;    // 505：底部状态条（预留）
+// 底部状态条（round-14）：与 HD 完整背包原生状态条同一几何规范——距面板左 8px、
+// 389x18，紧贴面板底边（背包 405x459 的对应项在 y+433，同为“底边 18px 高”）。
+inline constexpr int kStatusTextY = kPanelHeight - 18;    // 505：底部状态条顶
+inline constexpr int kStatusInsetX = 8;
+inline constexpr int kStatusWidth = 389;
+inline constexpr int kStatusHeight = 18;
+static_assert(kStatusTextY + kStatusHeight == kPanelHeight,
+    "状态条必须贴住面板底边（与背包状态条同构）");
+static_assert(PagerRowY(kPagerRowBottomGapMin) + kPagerRowHeight == kStatusTextY,
+    "最小空隙时分页行底必须正好贴住状态条顶（不遮挡）");
+
+// 状态条悬停文案（round-14，与原生背包 mouse-over 完全同构）：
+// 普通宝物 = 宝物名；法术卷轴（id==1）= `宝物名. {法术名.}`，即原生 wsprintf
+// 的 "%s. {%s.}" 结果。返回 false 表示没有可显示的名字（纯空/无名字），
+// 调用方保持状态条原样（背包侧离开物品也不清空，语义一致）。
+inline bool FormatStatusHint(char* out, std::size_t capacity,
+                             const char* artifactName,
+                             const char* spellName) noexcept {
+    if (!out || capacity == 0) return false;
+    out[0] = '\0';
+    if (!artifactName || artifactName[0] == '\0') return false;
+    const bool scroll = spellName && spellName[0] != '\0';
+    std::size_t used = 0;
+    const auto append = [&](const char* text) noexcept {
+        for (const char* p = text; *p != '\0' && used + 1 < capacity; ++p)
+            out[used++] = *p;
+    };
+    append(artifactName);
+    if (scroll) {
+        append(". {");
+        append(spellName);
+        append(".}");
+    }
+    out[used] = '\0';
+    return used > 0;
+}
 inline constexpr std::size_t kGridColumns = 8;
 // 背包网格行数（8x8=64 格）；与仓库面板分页行数同值但语义不同，单独命名。
 inline constexpr std::size_t kGridRows = 8;

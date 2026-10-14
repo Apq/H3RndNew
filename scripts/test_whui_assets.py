@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""独立素材验收：不导入生成器，不依赖构建或游戏部署。"""
+"""独立素材验收：不依赖构建或游戏部署。
+
+整理按钮字形差分一项例外地导入生成器模块（仅重建“无字底板”，main() 有
+__main__ 门不会出图），其余测试仍不导入生成器。"""
 import ast
 from pathlib import Path
 import re
@@ -26,8 +29,8 @@ EXPECTED = {
        for direction in ('prev', 'next') for state in range(2)},
     'pager_n.pcx': (28, 22),
     'pager_s.pcx': (28, 22),
-    'tidy_n.pcx': (36, 22),
-    'tidy_s.pcx': (36, 22),
+    # round-13：整理并入主按钮四态管线（tidy0..tidy3，36x22）。
+    **{f'tidy{state}.pcx': (36, 22) for state in range(4)},
 }
 
 INK_NORMAL = (255, 231, 160)
@@ -126,9 +129,10 @@ def no_text_plate(width, height, selected):
 
 class WarehouseAssetsTest(unittest.TestCase):
     def test_exact_manifest(self):
-        self.assertEqual(len(EXPECTED), 48)
+        self.assertEqual(len(EXPECTED), 50)
         self.assertEqual({p.name for p in ASSETS.glob('*.pcx')}, set(EXPECTED))
-        for obsolete in ('title.pcx', 'tab12n.pcx', 'tab12s.pcx', 'tab13n.pcx', 'tab13s.pcx'):
+        for obsolete in ('title.pcx', 'tab12n.pcx', 'tab12s.pcx', 'tab13n.pcx',
+                         'tab13s.pcx', 'tidy_n.pcx', 'tidy_s.pcx'):
             self.assertFalse((ASSETS / obsolete).exists())
 
     def test_rgb_dimensions_and_independent_decode(self):
@@ -144,7 +148,7 @@ class WarehouseAssetsTest(unittest.TestCase):
                   for key in ('open', 'close', 'take', 'put')]
         groups += [[f'tab{tab:02d}{state}.pcx' for state in ('n', 's')] for tab in range(12)]
         groups += [[f'arrow_{key}{state}.pcx' for state in range(2)] for key in ('prev', 'next')]
-        groups += [['pager_n.pcx', 'pager_s.pcx'], ['tidy_n.pcx', 'tidy_s.pcx']]
+        groups += [['pager_n.pcx', 'pager_s.pcx'], [f'tidy{state}.pcx' for state in range(4)]]
         for names in groups:
             with self.subTest(group=names):
                 self.assertEqual(len({(ASSETS / name).read_bytes() for name in names}), len(names))
@@ -178,9 +182,12 @@ class WarehouseAssetsTest(unittest.TestCase):
 
         self.assertNotIn('stamp_text', called_names('make_pager'))
         self.assertIn('stamp_text', called_names('make_tidy'))
-        for suffix in ('n', 's'):
-            self.assertIn(f'"tidy_%s.pcx" % suffix', source)
-        self.assertIn('make_tidy(selected)', source)
+        # round-13：整理与主按钮同一构建管线（清勾母版 + 九宫格 + 参考框 + 文字）。
+        self.assertEqual(called_names('make_tidy'),
+                         {'clean_ok_base', 'nine_slice', 'apply_reference_frame',
+                          'stamp_text'})
+        self.assertIn('"tidy%d.pcx" % index', source)
+        self.assertIn('make_tidy(state)', source)
 
     def test_tab_order_config_matches_code_default(self):
         """[WarehouseUI] TabOrder 与代码内置默认必须逐字一致，且恰好是 12 个互异页签名。
@@ -215,6 +222,33 @@ class WarehouseAssetsTest(unittest.TestCase):
         self.assertEqual(sorted(names), sorted(TABS),
                          '页签名必须与素材生成器的 12 个标题集合一致')
 
+    def test_pager_row_gap_config_matches_code_default(self):
+        """[WarehouseUI] PagerRowBottomGap 与代码内置默认必须一致（round-13）。
+
+        与 TabOrder 同理：运行期读不到/读错键会静默用代码默认，若随包 ini 与
+        代码默认不一致，玩家“改了没反应”只能靠猜；ini 键、Flow.hpp 的
+        kPagerRowBottomGapDefault、钳制上下限三处同时核对。"""
+        ini = (ROOT / 'H3RndNew.default.ini').read_text(encoding='utf-8')
+        section, value = None, None
+        for raw_line in ini.splitlines():
+            line = raw_line.strip()
+            if line.startswith('[') and line.endswith(']'):
+                section = line[1:-1]
+                continue
+            if section == 'WarehouseUI' and line.startswith('PagerRowBottomGap'):
+                value = int(line.partition('=')[2].strip())
+        self.assertIsNotNone(value, 'default.ini 的 [WarehouseUI] 必须带 PagerRowBottomGap')
+
+        header = (ROOT / 'modules/WarehouseUiFlow.hpp').read_text(encoding='utf-8')
+        def literal(name):
+            match = re.search(rf'{name}\s*=\s*(\d+)\s*;', header)
+            self.assertIsNotNone(match, f'Flow.hpp 必须有 {name} 数字字面量')
+            return int(match.group(1))
+        self.assertEqual(value, literal('kPagerRowBottomGapDefault'),
+                         'ini 默认必须与代码内置默认一致')
+        self.assertLessEqual(literal('kPagerRowBottomGapMin'), value)
+        self.assertGreaterEqual(literal('kPagerRowBottomGapMax'), value)
+
     def test_reconstructed_plate_matches_pager(self):
         """自建底板必须与生成器实际出图逐像素一致——否则整理差分参照不可信。
 
@@ -229,78 +263,73 @@ class WarehouseAssetsTest(unittest.TestCase):
                 self.assertEqual(produced.tobytes(), expected.tobytes(),
                                  '独立重建的底板必须与生产页码出图完全一致')
 
-    def test_tidy_assets_share_one_glyph_in_two_inks(self):
-        """两态必须同字形不同墨色：与独立重建的同底板无文字 36x22 板逐像素差分即文字覆盖区。
+    def test_tidy_states_follow_button_pipeline(self):
+        """整理四态必须与主按钮同一管线（round-13 用户裁定）。
 
-        页码 round-12 收窄到 28x22 后，不能再拿 whui/pager_*.pcx 当 36x22 参照
-        （底板必须与 tidy 同尺寸、同纹理，否则尺寸差与纹理差会污染差分结果），
-        故参照板由 no_text_plate() 独立重建——纹理/亮度/金框规则与生成器一致，
-        但不导入生成器，且已由 test_reconstructed_plate_matches_pager 反向核过。"""
-        def load(name):
-            with Image.open(ASSETS / name) as raw:
-                return raw.convert('RGB')
+        底板 = 对应态 bv_ok 清勾九宫格 + 参考金框。此项例外地导入生成器模块
+        重建“无字底板”（main() 有 __main__ 门，不会出图），验证的组合事实是：
+        make_tidy 只在底板上叠“整理”两个字——差分区域必须小、居中、左右两半
+        各有足量笔画、比底板亮；四态同字形，按压态文字整体下移 1px。"""
 
-        normal, highlight = load('tidy_n.pcx'), load('tidy_s.pcx')
-        plate_n = no_text_plate(TIDY_WIDTH, TIDY_HEIGHT, False)
-        plate_s = no_text_plate(TIDY_WIDTH, TIDY_HEIGHT, True)
-        self.assertEqual(normal.size, (36, 22))
-        self.assertEqual(highlight.size, (36, 22))
-        self.assertEqual(plate_n.size, normal.size)
-        self.assertEqual(plate_s.size, highlight.size)
+        import make_whui_assets as gen
+        states = list(gen.STATE_ORDER)
+        plates, images, regions = {}, {}, {}
+        for index, state in enumerate(states):
+            plates[state] = gen.apply_reference_frame(
+                gen.nine_slice(gen.clean_ok_base(index), TIDY_WIDTH, TIDY_HEIGHT))
+            with Image.open(ASSETS / f'tidy{index}.pcx') as raw:
+                images[state] = raw.convert('RGB')
+            regions[state] = frozenset(
+                (x, y) for y in range(TIDY_HEIGHT) for x in range(TIDY_WIDTH)
+                if images[state].getpixel((x, y)) != plates[state].getpixel((x, y)))
 
-        def region(state, plate):
-            return frozenset((x, y) for y in range(state.height) for x in range(state.width)
-                             if state.getpixel((x, y)) != plate.getpixel((x, y)))
-
-        ink_n, ink_s = region(normal, plate_n), region(highlight, plate_s)
-        # 与同底板无文字素材一致 => 只有文字区被改动，底板完全复用。
-        self.assertLess(len(ink_n), 36 * 22 // 2)
-        self.assertLess(len(ink_s), 36 * 22 // 2)
-        self.assertGreaterEqual(len(ink_n), 250)
-        self.assertGreaterEqual(len(ink_s), 250)
-        # 同字形：两态文字覆盖区（含抗锯齿边缘）几乎逐像素一致。
-        self.assertLessEqual(len(ink_n ^ ink_s), 24,
-                             '两态文字覆盖区必须基本一致（同字形）')
-        left = min(point[0] for point in ink_n)
-        right = max(point[0] for point in ink_n)
-        top = min(point[1] for point in ink_n)
-        bottom = max(point[1] for point in ink_n)
-        self.assertGreaterEqual(left, 1)
-        self.assertLessEqual(right, 34)
-        self.assertGreaterEqual(top, 1)
-        self.assertLessEqual(bottom, 20)
-        self.assertGreaterEqual(right - left + 1, 24, '两个中文字符至少占 24 列')
-        self.assertGreaterEqual(bottom - top + 1, 10)
-        # 左右两半都有足量笔画 => 确实是两个字，不是单字或残留对勾。
-        middle = (left + right) // 2
-        for name, ink in (('tidy_n', ink_n), ('tidy_s', ink_s)):
-            self.assertGreaterEqual(sum(1 for point in ink if point[0] <= middle), 80,
-                                    f'{name} 左半字笔画不足')
-            self.assertGreaterEqual(sum(1 for point in ink if point[0] > middle), 80,
-                                    f'{name} 右半字笔画不足')
-
-        def mean_sum(state, points):
-            return sum(sum(state.getpixel(point)) for point in points) / len(points)
-
-        for name, state, plate, ink in (('tidy_n', normal, plate_n, ink_n),
-                                        ('tidy_s', highlight, plate_s, ink_s)):
-            self.assertGreater(mean_sum(state, ink), mean_sum(plate, ink),
-                               f'{name} 文字区应比底板更亮（浅黄墨色已烘焙）')
-        self.assertGreater(mean_sum(highlight, ink_s), mean_sum(normal, ink_n),
-                           '高亮态墨色整体应比普通态更亮')
+        for state in states:
+            ink = regions[state]
+            self.assertLess(len(ink), 36 * 22 // 2, f'{state} 差分必须只是文字区')
+            self.assertGreaterEqual(len(ink), 250, f'{state} 两字笔画不足')
+            left = min(p[0] for p in ink)
+            right = max(p[0] for p in ink)
+            top = min(p[1] for p in ink)
+            bottom = max(p[1] for p in ink)
+            self.assertGreaterEqual(left, 1)
+            self.assertLessEqual(right, 34)
+            self.assertGreaterEqual(top, 1)
+            self.assertLessEqual(bottom, 20)
+            self.assertGreaterEqual(right - left + 1, 24, f'{state} 至少占 24 列')
+            middle = (left + right) // 2
+            self.assertGreaterEqual(sum(1 for p in ink if p[0] <= middle), 80,
+                                    f'{state} 左半字笔画不足')
+            self.assertGreaterEqual(sum(1 for p in ink if p[0] > middle), 80,
+                                    f'{state} 右半字笔画不足')
+            image, plate = images[state], plates[state]
+            self.assertGreater(
+                sum(sum(image.getpixel(p)) for p in ink) / len(ink),
+                sum(sum(plate.getpixel(p)) for p in ink) / len(ink),
+                f'{state} 文字区应比底板更亮（浅黄墨色已烘焙）')
+        # 同字形：非按压态覆盖区几乎逐像素一致；按压态 = 普通态整体下移 1px。
+        base = set(regions['normal'])
+        for state in ('highlight', 'disabled'):
+            self.assertLessEqual(len(base ^ set(regions[state])), 24,
+                                 f'{state} 与普通态必须同字形')
+        pressed = {(x, y + 1) for (x, y) in regions['normal']}
+        self.assertLessEqual(len(pressed ^ set(regions['pressed'])), 24,
+                             '按压态文字应整体下移 1px（与主按钮同款）')
 
     def test_preview_matches_every_asset(self):
         names = [f'btn_{key}{state}.pcx' for key in ('open', 'take', 'put', 'close')
                  for state in range(4)]
+        names += [f'tidy{state}.pcx' for state in range(4)]
         names += [f'tab{tab:02d}{state}.pcx' for tab in range(12) for state in ('n', 's')]
         names += [f'arrow_{key}{state}.pcx' for key in ('prev', 'next') for state in range(2)]
         names += ['pager_n.pcx', 'pager_s.pcx']
-        names += ['tidy_n.pcx', 'tidy_s.pcx']
         with Image.open(ASSETS / 'preview.png') as preview:
-            self.assertEqual(preview.size, (888, 1440))
+            self.assertEqual(preview.size, (888, 1560))
             for index, name in enumerate(names):
                 with self.subTest(asset=name), Image.open(ASSETS / name) as image:
-                    x, y = index % 4 * 222 + 4, index // 4 * 120 + 4
+                    # 前 20 格（4 文本按钮 + 关闭 + 整理 = 5 组四态）按 4 列排；
+                    # 之后从第 5 行起继续 4 列（与生成器 button_rows 布局一致）。
+                    row = index // 4 if index < 20 else 5 + (index - 20) // 4
+                    x, y = index % 4 * 222 + 4, row * 120 + 4
                     expected = image.resize((image.width * 3, image.height * 3), Image.Resampling.NEAREST)
                     self.assertEqual(preview.crop((x, y, x + expected.width, y + expected.height)).tobytes(),
                                      expected.tobytes())
@@ -321,23 +350,25 @@ class WarehouseAssetsTest(unittest.TestCase):
                         self.assertIn(f"'arrow_{direction}{state}.pcx'", text)
                 for suffix in ('n', 's'):
                     self.assertIn(f"'pager_{suffix}.pcx'", text)
-                    self.assertIn(f"'tidy_{suffix}.pcx'", text)
-                self.assertRegex(text, r'\.Count -ne 48')
-                self.assertIn('期望48个指定PCX', text)
+                # round-13：整理四态与主按钮同一个 foreach 展开（tidy0..tidy3）。
+                self.assertIn('foreach ($state in 0..3) { "tidy$state.pcx" }', text)
+                self.assertRegex(text, r'\.Count -ne 50')
+                self.assertIn('期望50个指定PCX', text)
                 self.assertIn('Compare-Object $expectedAssets $assetNames', text)
                 gate = text.index('Compare-Object $expectedAssets $assetNames')
                 first_write = text.index('Copy-Item') if name == 'deploy.ps1' else text.index('$version = Get-PackVersion')
                 self.assertLess(gate, first_write)
 
-    def test_cpp_consumer_uses_48(self):
+    def test_cpp_consumer_manifest(self):
         text = (ROOT / 'tests/warehouse_ui_pcx_test.cpp').read_text(encoding='utf-8')
         self.assertIn('tab < 12', text)
-        self.assertIn('names.size() == 48', text)
-        self.assertIn('nonEmpty == 48', text)
-        self.assertIn('tidy_n.pcx', text)
-        self.assertIn('tidy_s.pcx', text)
-        self.assertIn('name.find("tidy_") == 0', text)
-        self.assertNotRegex(text, r'\b46\b')
+        self.assertIn('names.size() == 50', text)
+        self.assertIn('nonEmpty == 50', text)
+        for state in range(4):
+            self.assertIn(f'"tidy{state}.pcx"', text)
+        self.assertIn('name.find("tidy") == 0', text)
+        self.assertNotIn('tidy_', text)
+        self.assertNotRegex(text, r'\b46\b|\b48\b')
         for dimensions in ('width = 24; height = 24;', 'width = 66; height = 32;',
                            'width = 36; height = 22;', 'width = 18; height = 22;',
                            'width = 28; height = 22;'):
