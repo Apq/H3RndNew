@@ -914,6 +914,18 @@ void RunWarehouseUiFlowTests_() {
               && warehouseui::ConsumeWarehouseDown(30052)
               && !warehouseui::IsWarehouseControlId(30005),
           "organize button id 30052 joins the warehouse control set");
+    // round-8.1（实机回归）：打开按钮在背包面板矩形内，几何兜底必须让位于已知控件。
+    Check(!warehouseui::UsesGeometryFallback(30200)
+              && !warehouseui::UsesGeometryFallback(30060)
+              && !warehouseui::UsesGeometryFallback(30052)
+              && !warehouseui::UsesGeometryFallback(30400)
+              && !warehouseui::UsesGeometryFallback(30100)
+              && warehouseui::UsesGeometryFallback(1005)
+              && warehouseui::UsesGeometryFallback(2005)
+              && warehouseui::UsesGeometryFallback(0)
+              && warehouseui::UsesGeometryFallback(-1),
+          "geometry fallback yields to known warehouse control ids "
+          "(the open button lives inside the backpack rect)");
 
     if (g_failures != 0) {
         std::fprintf(stderr, "warehouse UI flow: %d/%d checks failed\n",

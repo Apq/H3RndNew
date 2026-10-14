@@ -50,6 +50,12 @@ inline constexpr int GridSlotFromPoint(int x, int y, int originX, int originY,
 inline constexpr bool ExecutesWarehouseAction(int subtype) noexcept {
     return subtype == 0xD;
 }
+// round-8.1（实机回归）：几何兜底只允许兜“背包区域内但没有已知控件”的点击。
+// 打开按钮(30200)位于背包面板矩形内部，若先做几何判定会被“区域内”吞掉，
+// 表现为“点仓库按钮没反应”。已知仓库控件必须优先走各自的 ID 分派。
+inline constexpr bool UsesGeometryFallback(int id) noexcept {
+    return !IsWarehouseControlId(id);
+}
 template <typename NativeCallback>
 inline int CallNativeOnce(NativeCallback&& nativeCallback) {
     return nativeCallback(); // No finalize-close phase after a successful move.

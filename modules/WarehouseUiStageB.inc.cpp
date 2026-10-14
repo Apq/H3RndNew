@@ -586,13 +586,18 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
         WarehouseUiDepositSlot_(dlg, id - 2000);
         return true;
     }
-    const int pointSlot = WarehouseUiBackpackSlotAtPoint_(msg);
-    const bool insideBackpack = pointSlot >= 0
-        || warehouseui::PointInRect(msg->GetX(), msg->GetY(),
-            g_wh_ui_live_.layout.backpack);
-    if (insideBackpack) {
-        WarehouseUiDepositSlot_(dlg, pointSlot);
-        return true;
+    // round-8.1（实机回归）：几何兜底只兜“背包区域内但无已知控件”的点击（空格、
+    // 底板）。打开按钮(30200)等仓库控件位于背包面板矩形内部，若先做几何判定会被
+    // “区域内”吞掉——表现为“点仓库按钮没反应”。已知控件必须走各自 ID 分派。
+    if (warehouseui::UsesGeometryFallback(id)) {
+        const int pointSlot = WarehouseUiBackpackSlotAtPoint_(msg);
+        const bool insideBackpack = pointSlot >= 0
+            || warehouseui::PointInRect(msg->GetX(), msg->GetY(),
+                g_wh_ui_live_.layout.backpack);
+        if (insideBackpack) {
+            WarehouseUiDepositSlot_(dlg, pointSlot);
+            return true;
+        }
     }
     if (id >= kWhUiSlotBase_ && id < kWhUiSlotBase_ + kWhUiSlotCount_) {
         const int local = id - kWhUiSlotBase_;
