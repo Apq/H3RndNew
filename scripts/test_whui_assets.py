@@ -9,7 +9,7 @@ import re
 import struct
 import unittest
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / 'whui'
@@ -20,6 +20,13 @@ TABS = ['常规', '卷轴', '装备', '头部', '肩部', '项链', '武器',
 # round-12：页码按两位数定宽 28x22；两字页签与整理按钮仍是 36x22。
 PAGER_WIDTH, PAGER_HEIGHT = 28, 22
 TIDY_WIDTH, TIDY_HEIGHT = 36, 22
+# 各控件画布与文字排版参数（必须与生成器调用点一致，文字覆盖集合按此复刻）。
+BTN_W, BTN_H = 66, 32
+CLOSE_W, CLOSE_H = 24, 24
+TAB_W, TAB_H = 36, 22
+ARROW_W, ARROW_H = 18, 22
+STATE_ORDER = ('normal', 'pressed', 'highlight', 'disabled')
+TIDY_TEXT = '整理'
 EXPECTED = {
     **{f'btn_{button}{state}.pcx': ((24, 24) if button == 'close' else (66, 32))
        for button in ('open', 'close', 'take', 'put') for state in range(4)},
@@ -36,6 +43,22 @@ EXPECTED = {
 INK_NORMAL = (255, 231, 160)
 INK_HIGHLIGHT = (255, 248, 214)
 INK_SHADOW = (28, 18, 8)
+
+# round-17：底纹源改为 bv_bg.pcx 里一块无金色木纹（bv_ok*.pcx 母版中央的金色勾号
+# 会污染取样带，旧实现在 highlight 态残留 35 个金色像素、并产生 5px 竖条周期）。
+# 以下参数必须与 make_whui_assets.py 完全一致；
+# test_texture_constants_match_generator 从生成器源码 AST 逐项核对防漂移。
+TEXTURE_BLOCK = (184, 264, 248, 312)     # bv_bg 内 64x48，无金色像素
+TEXTURE_DESAT = 0.12                     # 木纹饱和 0.740 -> 按钮底纹 0.648
+STATE_TINT = {'normal': 1.0843, 'pressed': 0.845,
+              'highlight': 1.35, 'disabled': 0.853}
+TAB_TINT = {'n': 0.92, 's': 1.35}
+
+
+def is_gold_pixel(px):
+    """参考图勾号的金色判定（亮黄、蓝通道明显低），与生成器同规则。"""
+    r, g, b = px
+    return r > 120 and g > 95 and b < 0.72 * g and (r + g) - 2 * b > 120
 
 
 def decode_pcx(data, size):
@@ -87,16 +110,32 @@ def mirror_tile(patch, width, height):
     return out
 
 
-def scale_brightness(image, factors):
-    """两态亮度：按生成器的 int(v*f + 0.5) 后钳制，不用 Python round（半值取偶会偏）。"""
+def scale_tinted(image, factor, desaturate=TEXTURE_DESAT):
+    """同生成器 scale_color：先去饱和再乘系数，int(v*f+0.5) 后钳制。
+
+    不用 Python round（半值取偶会偏）；去饱和必须在乘系数之前，顺序反了结果不同。"""
     src = image.load()
     out = Image.new('RGB', image.size)
     dst = out.load()
     for y in range(image.height):
         for x in range(image.width):
-            dst[x, y] = tuple(max(0, min(255, int(src[x, y][i] * factors[i] + 0.5)))
-                              for i in range(3))
+            channels = list(src[x, y])
+            if desaturate > 0.0:
+                lum = 0.299 * channels[0] + 0.587 * channels[1] + 0.114 * channels[2]
+                channels = [c + (lum - c) * desaturate for c in channels]
+            dst[x, y] = tuple(max(0, min(255, int(c * factor + 0.5)))
+                              for c in channels)
     return out
+
+
+def texture_block():
+    """底纹源：whui_src/bv_bg.pcx 的无金色木纹块（与生成器 TESTURE_BLOCK 同一块）。"""
+    with Image.open(SRC / 'bv_bg.pcx') as master:
+        block = master.convert('RGB').crop(TEXTURE_BLOCK)
+    self_check = [px for px in block.getdata() if is_gold_pixel(px)]
+    if self_check:
+        raise AssertionError('纹理块含 %d 个金色像素（参考图勾号未除净）' % len(self_check))
+    return block
 
 
 def gold_border(image):
@@ -111,20 +150,102 @@ def gold_border(image):
         px[width - 1, y] = (108, 88, 40)
 
 
-def no_text_plate(width, height, selected):
-    """不导入生成器，从母版 whui_src/bv_ok0.pcx 的 3,3,10,10 7x7 块自建同纹理无字底板。
+def reference_frame(canvas):
+    """同生成器 apply_reference_frame：1px 边框按比例取自 bv_frmL.pcx 采样。"""
+    with Image.open(SRC / 'bv_frmL.pcx') as raw:
+        frame = raw.convert('RGB')
+    width, height = canvas.size
+    frame_px, out_px = frame.load(), canvas.load()
+    for x in range(width):
+        source_x = x * (frame.width - 1) // max(width - 1, 1)
+        out_px[x, 0] = frame_px[source_x, 0]
+        out_px[x, height - 1] = frame_px[source_x, frame.height - 1]
+    for y in range(1, height - 1):
+        source_y = y * (frame.height - 1) // max(height - 1, 1)
+        out_px[0, y] = frame_px[0, source_y]
+        out_px[width - 1, y] = frame_px[frame.width - 1, source_y]
+    return canvas
 
-    页码在 round-12 收窄到 28x22，整理仍是 36x22，两者不再共用同一块底板，
-    所以整理字形差分不能再直接拿 whui/pager_*.pcx 当参照——这里按生成器相同的
-    纹理取样、镜像平铺、亮度取整与金框规则，独立重建 36x22 同纹理无字板。"""
-    with Image.open(SRC / 'bv_ok0.pcx') as master:
-        patch = master.convert('RGB').crop((3, 3, 10, 10))
-    factors = (1.35, 1.32, 1.28) if selected else (0.92, 0.92, 0.92)
-    fill = scale_brightness(mirror_tile(patch, width - 2, height - 2), factors)
+
+def tab_plate(width, height, factor, desaturate=TEXTURE_DESAT):
+    """页签/页码/箭头一类底板（不导入生成器）：镜像平铺木纹 + 两态亮度 + 固定金框。
+
+    生成器 make_panel_canvas 把整幅 (w,h) 平铺件贴到 (1,1) 并被画布裁掉右下 1px，
+    等价于把 (w-2,h-2) 平铺件贴到 (1,1)——木纹块 64x48 大于所有这类控件，
+    平铺只落下一个周期，两者逐像素等价。箭头禁用态另有 0.6 去饱和，故参数化。"""
+    fill = scale_tinted(mirror_tile(texture_block(), width - 2, height - 2),
+                        factor, desaturate)
     canvas = Image.new('RGB', (width, height))
     canvas.paste(fill, (1, 1))
     gold_border(canvas)
     return canvas
+
+
+def button_plate(width, height, factor):
+    """按钮/整理一类底板（不导入生成器）：整幅平铺（含镜像第二周期）+ 参考金框。"""
+    return reference_frame(
+        scale_tinted(mirror_tile(texture_block(), width, height), factor))
+
+
+# 与生成器同序的字体候选：文字覆盖集合必须按同一字体度量复刻，否则会误比文字像素。
+FONT_CANDIDATES = [
+    r'C:\Windows\Fonts\simhei.ttf',
+    r'C:\Windows\Fonts\msyhbd.ttc',
+    r'C:\Windows\Fonts\msyh.ttc',
+    r'C:\Windows\Fonts\simsun.ttc',
+]
+
+
+def load_font(size):
+    for path in FONT_CANDIDATES:
+        if Path(path).exists():
+            return ImageFont.truetype(path, size)
+    raise RuntimeError('找不到可用的中文字体')
+
+
+def stamp_cover(text, size, max_w, canvas_size, dy):
+    """复刻生成器 stamp_text 覆盖的像素（字形墨迹 + 1px 阴影 + 抗锯齿外扩 2px）。
+
+    文字像素是墨色与底纹的混合（边缘半透明），不属于“底纹”，比对时必须跳过；
+    这是按字体度量独立算出的精确集合，比按矩形粗跳更严——矩形会连带跳过一大片
+    真正的底纹像素，反而放松了 round-17 要守的“底纹只来自 bv_bg”不变量。"""
+    font = load_font(size)
+    box = font.getbbox(text)
+    tw, th = max(1, box[2] - box[0]), max(1, box[3] - box[1])
+    mask = Image.new('L', (tw + 6, th + 8), 0)
+    ImageDraw.Draw(mask).text((3 - box[0], 3 - box[1]), text, font=font, fill=255)
+    if mask.size[0] > max_w:
+        mask = mask.resize((max_w, mask.size[1]), Image.LANCZOS)
+    width, height = canvas_size
+    x0 = (width - mask.size[0]) // 2
+    y0 = (height - mask.size[1]) // 2 + dy
+    px = mask.load()
+    cover = set()
+    for my in range(mask.size[1]):
+        for mx in range(mask.size[0]):
+            if px[mx, my] == 0:
+                continue
+            for ay in range(y0 + my - 2, y0 + my + 3):
+                for ax in range(x0 + mx - 2, x0 + mx + 3):
+                    if 1 <= ax < width - 1 and 1 <= ay < height - 1:
+                        cover.add((ax, ay))
+    return cover
+
+
+def glyph_cover(text, size, canvas_size):
+    """箭头字形覆盖集合：生成器对箭头直接用 draw.text（不走 stamp_text）。"""
+    font = load_font(size)
+    box = font.getbbox(text)
+    gw, gh = box[2] - box[0], box[3] - box[1]
+    width, height = canvas_size
+    left = (width - gw) // 2 - box[0]
+    top = (height - gh) // 2 - box[1]
+    cover = set()
+    for yy in range(top - 2, top + gh + 3):
+        for xx in range(left - 2, left + gw + 3):
+            if 1 <= xx < width - 1 and 1 <= yy < height - 1:
+                cover.add((xx, yy))
+    return cover
 
 
 class WarehouseAssetsTest(unittest.TestCase):
@@ -182,12 +303,37 @@ class WarehouseAssetsTest(unittest.TestCase):
 
         self.assertNotIn('stamp_text', called_names('make_pager'))
         self.assertIn('stamp_text', called_names('make_tidy'))
-        # round-13：整理与主按钮同一构建管线（清勾母版 + 九宫格 + 参考框 + 文字）。
+        # round-17：整理与主按钮同一构建管线（无金色木纹四态底纹 + 参考框 + 文字）。
         self.assertEqual(called_names('make_tidy'),
-                         {'clean_ok_base', 'nine_slice', 'apply_reference_frame',
-                          'stamp_text'})
+                         {'state_texture', 'apply_reference_frame', 'stamp_text'})
+        # round-17：make_button 只做底纹（state_texture）+ 参考框 + 文字；len 是排版用的内建调用。
+        self.assertEqual(called_names('make_button') - {'len'},
+                         {'state_texture', 'apply_reference_frame', 'stamp_text'})
         self.assertIn('"tidy%d.pcx" % index', source)
         self.assertIn('make_tidy(state)', source)
+        # round-17：底纹不再来自 bv_ok 母版清勾（那是金色残留与 5px 竖条的来源）。
+        for retired in ('clean_ok_base', 'nine_slice', 'texture_patch', 'measure_states'):
+            self.assertNotIn('def %s(' % retired, source,
+                             '%s 是 round-17 淘汰的旧底纹路径' % retired)
+
+    def test_texture_constants_match_generator(self):
+        """底纹常量必须与生成器逐项一致（测试自建底板否则会误判）。
+
+        round-17 起底纹源是 bv_bg.pcx 里一块无金色木纹 + 四态/两态亮度系数；
+        这些数字同时写在测试与生成器里，必须 AST 核对防止只改一边。"""
+        source = (ROOT / 'scripts/make_whui_assets.py').read_text(encoding='utf-8-sig')
+        tree = ast.parse(source)
+        literals = {}
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        literals[target.id] = node.value
+        self.assertEqual(ast.literal_eval(literals['TEXTURE_BLOCK']), TEXTURE_BLOCK)
+        self.assertAlmostEqual(ast.literal_eval(literals['TEXTURE_DESAT']),
+                               TEXTURE_DESAT, places=6)
+        self.assertEqual(ast.literal_eval(literals['STATE_TINT']), STATE_TINT)
+        self.assertEqual(ast.literal_eval(literals['TAB_TINT']), TAB_TINT)
 
     def test_tab_order_config_matches_code_default(self):
         """[WarehouseUI] TabOrder 与代码内置默认必须逐字一致，且恰好是 12 个互异页签名。
@@ -253,20 +399,125 @@ class WarehouseAssetsTest(unittest.TestCase):
         """自建底板必须与生成器实际出图逐像素一致——否则整理差分参照不可信。
 
         页码仍是同一条 make_panel_canvas 路径，取 28x22 做交叉验证；通过即证明
-        本文件独立重建的纹理/亮度/金框规则与生产生成器等价。"""
+        本文件独立重建的无金色木纹/两态亮度/去饱和/金框规则与生产生成器等价，
+        同时说明页码底纹里不存在 bv_ok 母版的勾号残留（bv_bg 块本身就无金色）。"""
         for suffix, selected in (('n', False), ('s', True)):
             with self.subTest(state=suffix):
                 with Image.open(ASSETS / f'pager_{suffix}.pcx') as pager:
                     produced = pager.convert('RGB')
                 self.assertEqual(produced.size, (PAGER_WIDTH, PAGER_HEIGHT))
-                expected = no_text_plate(PAGER_WIDTH, PAGER_HEIGHT, selected)
+                expected = tab_plate(PAGER_WIDTH, PAGER_HEIGHT,
+                                     TAB_TINT['s' if selected else 'n'])
                 self.assertEqual(produced.tobytes(), expected.tobytes(),
                                  '独立重建的底板必须与生产页码出图完全一致')
+
+    def assert_plate_matches(self, produced, plate, label, skip=()):
+        """逐像素比对底纹，跳过两类非底纹像素。
+
+        1) 1px 边框：金框/参考框由独立测试覆盖；
+        2) 文字覆盖区：字形墨迹、1px 阴影与抗锯齿边缘都是墨色与底纹的混合（实测
+           边缘会与底纹差 1 个单位），不属于底纹；覆盖集合由 stamp_cover/glyph_cover
+           按生成器同款字体度量独立算出，比按矩形粗跳更严——矩形会连带跳过一大片
+           真正的底纹像素，反而放松了 round-17 要守的“底纹只来自 bv_bg”不变量。"""
+        width, height = produced.size
+        covered = set(skip)
+        for y in range(1, height - 1):
+            for x in range(1, width - 1):
+                if (x, y) in covered:
+                    continue
+                self.assertEqual(
+                    produced.getpixel((x, y)), plate.getpixel((x, y)),
+                    '%s 底纹像素 (%d,%d) 与 bv_bg 木纹重建不符' % (label, x, y))
+
+    def test_reconstructed_plates_match_textured_assets(self):
+        """页签/箭头/页码底纹必须等于“bv_bg 木纹块 × 状态系数”的独立重建。
+
+        round-17 的核心不变量：底纹只能来自 bv_bg 的无金色木纹。一旦有人把底纹
+        换回 bv_ok 清勾/取样带平铺（金色残留 + 5px 竖条），这里会逐像素失败。
+        页签/箭头跳过文字覆盖像素；页码无文字，全部像素都要一致。"""
+        cases = [(f'tab{index:02d}{suffix}.pcx', TAB_TINT[tint],
+                  stamp_cover(TABS[index], 13, TAB_W - 6, (TAB_W, TAB_H), -1))
+                 for index in range(12)
+                 for suffix, tint in (('n', 'n'), ('s', 's'))]
+        cases += [('arrow_prev0.pcx', TAB_TINT['s'],
+                   glyph_cover('<', 14, (ARROW_W, ARROW_H))),
+                  ('arrow_next0.pcx', TAB_TINT['s'],
+                   glyph_cover('>', 14, (ARROW_W, ARROW_H))),
+                  ('pager_n.pcx', TAB_TINT['n'], ()),
+                  ('pager_s.pcx', TAB_TINT['s'], ())]
+        for name, factor, cover in cases:
+            with self.subTest(asset=name):
+                with Image.open(ASSETS / name) as raw:
+                    produced = raw.convert('RGB')
+                plate = tab_plate(*produced.size, factor)
+                self.assert_plate_matches(produced, plate, name, skip=cover)
+
+    def test_arrow_disabled_state_matches_independent_rebuild(self):
+        """禁用态箭头：同底纹 + 额外 0.6 亮度 / 0.6 去饱和（与 make_arrow 同规则）。
+
+        箭头走“paste 到 (1,1) + 固定金框”这一条路径（不是按钮的整幅参考框），
+        所以这里用 tab_plate 并传入禁用态去饱和量。"""
+        for name, glyph in (('arrow_prev1.pcx', '<'), ('arrow_next1.pcx', '>')):
+            with self.subTest(asset=name):
+                with Image.open(ASSETS / name) as raw:
+                    produced = raw.convert('RGB')
+                plate = tab_plate(*produced.size, TAB_TINT['n'] * 0.6, 0.6)
+                self.assert_plate_matches(produced, plate, name,
+                                          skip=glyph_cover(glyph, 14, produced.size))
+
+    def button_cases(self):
+        """(素材名, 组, 状态, 文字, 字号, 可用宽度, 画布) —— 与生成器调用点一致。"""
+        cases = []
+        for button, text in (('open', '仓库'), ('take', '一键取出'), ('put', '一键放入')):
+            for index, state in enumerate(STATE_ORDER):
+                cases.append((f'btn_{button}{index}.pcx', f'btn_{button}', state,
+                              text, 16 if len(text) <= 2 else 15, BTN_W - 12,
+                              (BTN_W, BTN_H)))
+        for index, state in enumerate(STATE_ORDER):
+            cases.append((f'btn_close{index}.pcx', 'btn_close', state, 'X', 14,
+                          CLOSE_W - 4, (CLOSE_W, CLOSE_H)))
+            cases.append((f'tidy{index}.pcx', 'tidy', state, TIDY_TEXT, 13,
+                          TIDY_WIDTH - 6, (TIDY_WIDTH, TIDY_HEIGHT)))
+        return cases
+
+    def test_button_plates_match_independent_rebuild(self):
+        """按钮/关闭/整理四态底纹必须等于“bv_bg 木纹块 × 状态系数”的独立重建。
+
+        文字覆盖像素跳过（字形差分由 test_tidy_states_follow_button_pipeline 覆盖），
+        并验证四态亮度序 highlight > normal > pressed/disabled。亮度均值先算后断言，
+        避免某个素材断言失败导致后面的序检查报 KeyError 掩盖真实原因。"""
+        plates, means = {}, {}
+        for name, group, state, text, size, max_w, canvas in self.button_cases():
+            with self.subTest(asset=name):
+                with Image.open(ASSETS / name) as raw:
+                    produced = raw.convert('RGB')
+                self.assertEqual(produced.size, canvas)
+                plate = button_plate(canvas[0], canvas[1], STATE_TINT[state])
+                plates[name] = plate
+                picked = [plate.getpixel((2, 2)),
+                          plate.getpixel((canvas[0] - 3, canvas[1] - 3))]
+                means[f'{group}:{state}'] = sum(sum(p) for p in picked) / len(picked)
+        for name, group, state, text, size, max_w, canvas in self.button_cases():
+            with self.subTest(asset=name):
+                with Image.open(ASSETS / name) as raw:
+                    produced = raw.convert('RGB')
+                dy = 1 if state == 'pressed' else 0
+                self.assert_plate_matches(
+                    produced, plates[name], name,
+                    skip=stamp_cover(text, size, max_w, canvas, dy))
+        for group in [f'btn_{b}' for b in ('open', 'close', 'take', 'put')] + ['tidy']:
+            normal = means[f'{group}:normal']
+            self.assertGreater(means[f'{group}:highlight'], normal,
+                               f'{group} 高亮态应比普通态亮')
+            self.assertLess(means[f'{group}:pressed'], normal,
+                            f'{group} 按压态应比普通态暗')
+            self.assertLess(means[f'{group}:disabled'], normal,
+                            f'{group} 禁用态应比普通态暗')
 
     def test_tidy_states_follow_button_pipeline(self):
         """整理四态必须与主按钮同一管线（round-13 用户裁定）。
 
-        底板 = 对应态 bv_ok 清勾九宫格 + 参考金框。此项例外地导入生成器模块
+        底板 = 对应态无金色木纹底纹 + 参考金框。此项例外地导入生成器模块
         重建“无字底板”（main() 有 __main__ 门，不会出图），验证的组合事实是：
         make_tidy 只在底板上叠“整理”两个字——差分区域必须小、居中、左右两半
         各有足量笔画、比底板亮；四态同字形，按压态文字整体下移 1px。"""
@@ -276,7 +527,7 @@ class WarehouseAssetsTest(unittest.TestCase):
         plates, images, regions = {}, {}, {}
         for index, state in enumerate(states):
             plates[state] = gen.apply_reference_frame(
-                gen.nine_slice(gen.clean_ok_base(index), TIDY_WIDTH, TIDY_HEIGHT))
+                gen.state_texture(TIDY_WIDTH, TIDY_HEIGHT, state))
             with Image.open(ASSETS / f'tidy{index}.pcx') as raw:
                 images[state] = raw.convert('RGB')
             regions[state] = frozenset(

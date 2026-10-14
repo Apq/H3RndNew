@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """仓库UI（H3RndNew 第十二轮）素材生成器。
 
-按钮底图严格沿用 H3MegaDesc 的 bv_ok0..3.pcx + bv_frmL.pcx 母版：
-先清除参考图中央勾号，再用九宫格保留金框和原始四态底纹，最后叠加本项目文字。
+按钮底图沿用 H3MegaDesc 的金框母版 bv_frmL.pcx，但底纹（round-17 起）取自
+整窗背景 bv_bg.pcx 里一块经校验无金色像素的斜向木纹——bv_ok*.pcx 母版中央
+被金色勾号占据，勾号投影还污染了两侧取样带，用它重建会得到 5px 周期竖条并
+残留金色（用户报“按钮背景纹理粗糙、含没除净的金色元素”）。
+四态差异由实测的亮度系数给出（STATE_TINT），页签/页码两态沿用 round-12 系数。
 标题不再烘焙PCX，生产代码直接使用原生背包的 H3DlgText 参数。
 
   whui/btn_open{0..3}.pcx    66x32  "仓库"
@@ -81,35 +84,56 @@ def load_rgb(name):
         return im.convert("RGB")
 
 
-def mean_of(im, box):
-    patch = im.crop(box)
-    px = list(patch.getdata())
-    n = len(px)
-    return tuple(sum(p[i] for p in px) / n for i in range(3))
+# ---- 底纹纹理源（round-17：修“纹理粗糙 / 残留金色元素”） ----
+# 旧实现从 bv_ok*.pcx 中央清勾后，用左右两条 5px 取样带交替平铺重建底纹，两个问题：
+#   1) 5px 周期竖条重复，实机看着“粗糙、怪”；
+#   2) 勾号的暗色投影污染了两侧取样带（实测左带亮度 52.4、右带 59.1，而同排干净列
+#      70.9），且 bv_ok2（highlight）的勾号扩散进取样带内——清勾后仍残留 35 个金色像素。
+# 改为取 bv_bg.pcx（整窗背景，无勾号）里一块经校验无金色的斜向木纹做底纹源：
+# 64x48 远大于任何控件（最大 66x32），镜像平铺后几乎看不出重复周期。
+TEXTURE_BLOCK = (184, 264, 248, 312)   # bv_bg 内 64x48，实测 0 金色像素
+TEXTURE_DESAT = 0.12                   # 木纹饱和 0.740 -> 按钮底纹 0.648
+# 四态亮度：实测“排除金色像素后的均值比”——state1/state0=0.845、state3/state0=0.853；
+# highlight 取 1.35（与页签选中态同款；bv_ok2 的白描边会把比值虚高到 1.53，直接用会过曝）。
+# normal 的 1.0843 是把木纹 52.2 校准到按钮底纹 56.7。
+STATE_TINT = {
+    "normal": 1.0843,
+    "pressed": 0.845,
+    "highlight": 1.35,
+    "disabled": 0.853,
+}
+TAB_TINT = {"n": 0.92, "s": 1.35}      # 沿用 round-12 两态系数（本轮只换纹理源）
 
 
-def ratio(a, b):
-    return tuple(a[i] / max(b[i], 1e-6) for i in range(3))
+def is_gold_pixel(px):
+    """参考图勾号的金色判定（亮黄、蓝通道明显低）。"""
+    r, g, b = px
+    return r > 120 and g > 95 and b < 0.72 * g and (r + g) - 2 * b > 120
 
 
-def measure_states():
-    """四态亮度比例：取各 bv_ok 左上 8x8（无对勾区域）实测均值相对普通态。"""
-    base = mean_of(load_rgb("bv_ok0.pcx"), (3, 3, 11, 11))
-    high = mean_of(load_rgb("bv_ok2.pcx"), (3, 3, 11, 11))
-    press = mean_of(load_rgb("bv_ok1.pcx"), (3, 3, 11, 11))
-    disabled_full0 = mean_of(load_rgb("bv_ok0.pcx"), (0, 0, 48, 40))
-    disabled_full3 = mean_of(load_rgb("bv_ok3.pcx"), (0, 0, 48, 40))
-    return {
-        "base": base,
-        "highlight": ratio(high, base),
-        "pressed": ratio(press, base),
-        "disabled": ratio(disabled_full3, disabled_full0),
-    }
+def texture_source():
+    """底纹源：bv_bg 的无金色木纹块（自证无金色——换源时当场拦住勾号残留）。"""
+    block = load_rgb("bv_bg.pcx").crop(TEXTURE_BLOCK)
+    gold = sum(1 for px in block.getdata() if is_gold_pixel(px))
+    if gold:
+        raise ValueError("TEXTURE_BLOCK 含 %d 个金色像素（参考图勾号未除净）" % gold)
+    return block
 
 
-def texture_patch(w, h):
-    """页签/箭头沿用按钮母版左侧无勾号纹理。"""
-    return load_rgb("bv_ok0.pcx").crop((3, 3, 10, 10))
+def tinted_texture(w, h, factor, desaturate=TEXTURE_DESAT):
+    """镜像平铺的木纹底纹 + 状态色调（无勾号、无 5px 竖条周期）。"""
+    fill = mirror_tile(texture_source(), w, h)
+    return scale_color(fill, (factor, factor, factor), desaturate=desaturate)
+
+
+def state_texture(w, h, state):
+    """按钮四态底纹（normal/pressed/highlight/disabled）。"""
+    return tinted_texture(w, h, STATE_TINT[state])
+
+
+def tab_texture(w, h, selected):
+    """页签/页码/箭头底纹（选中/未选中两态，沿用 round-12 系数）。"""
+    return tinted_texture(w, h, TAB_TINT["s" if selected else "n"])
 
 
 def mirror_tile(patch, w, h):
@@ -184,52 +208,9 @@ def gold_border(im):
 
 STATE_ORDER = ("normal", "pressed", "highlight", "disabled")
 
-
-def clean_ok_base(state_index):
-    """清除四态参考图的勾号及其阴影，只重建中央底纹。"""
-    src = load_rgb("bv_ok%d.pcx" % state_index)
-    if src.size != (48, 40):
-        raise ValueError("bv_ok%d must be 48x40, got %s" % (state_index, src.size))
-    out = src.copy()
-    # 勾号实际覆盖 x=9..39、y=6..35（含亮边、深色投影）；
-    # 取样带避开两侧暗影：左带 x=3..7，右带 x=41..44。
-    x0, x1, y0, y1 = 8, 40, 6, 36
-    left = src.crop((3, 6, 8, 36))
-    right = src.crop((40, 6, 45, 36))
-    for y in range(y0, y1):
-        for x in range(x0, x1):
-            tile = (x - x0) // left.width
-            offset = (x - x0) % left.width
-            donor = left if tile % 2 == 0 else right
-            if tile % 4 in (1, 2):
-                offset = donor.width - 1 - offset
-            out.putpixel((x, y), donor.getpixel((offset, y - y0)))
-    return out
-
-
-def nine_slice(src, width, height, margin=5):
-    """九宫格缩放：边角来自MegaDesc母版，中区仅延展同态底纹。"""
-    sw, sh = src.size
-    out = Image.new("RGB", (width, height))
-    # corners
-    out.paste(src.crop((0, 0, margin, margin)), (0, 0))
-    out.paste(src.crop((sw - margin, 0, sw, margin)), (width - margin, 0))
-    out.paste(src.crop((0, sh - margin, margin, sh)), (0, height - margin))
-    out.paste(src.crop((sw - margin, sh - margin, sw, sh)),
-              (width - margin, height - margin))
-    # edges and center
-    out.paste(src.crop((margin, 0, sw - margin, margin)).resize(
-        (width - 2 * margin, margin), Image.NEAREST), (margin, 0))
-    out.paste(src.crop((margin, sh - margin, sw - margin, sh)).resize(
-        (width - 2 * margin, margin), Image.NEAREST), (margin, height - margin))
-    out.paste(src.crop((0, margin, margin, sh - margin)).resize(
-        (margin, height - 2 * margin), Image.NEAREST), (0, margin))
-    out.paste(src.crop((sw - margin, margin, sw, sh - margin)).resize(
-        (margin, height - 2 * margin), Image.NEAREST), (width - margin, margin))
-    center = src.crop((margin, margin, sw - margin, sh - margin)).resize(
-        (width - 2 * margin, height - 2 * margin), Image.NEAREST)
-    out.paste(center, (margin, margin))
-    return out
+# round-17 已删除 clean_ok_base/nine_slice：它们从 bv_ok*.pcx 母版中央清勾后用
+# 左右取样带交替平铺 + 九宫格 NEAREST 拉伸重建底纹，正是“纹理粗糙 + 残留金色”
+# 的来源。底纹现在统一由 tinted_texture() 从 bv_bg 木纹块生成。
 
 
 def apply_reference_frame(canvas):
@@ -251,9 +232,8 @@ def apply_reference_frame(canvas):
     return canvas
 
 
-def make_button(text, state, ratios):
-    state_index = STATE_ORDER.index(state)
-    canvas = apply_reference_frame(nine_slice(clean_ok_base(state_index), BTN_W, BTN_H))
+def make_button(text, state):
+    canvas = apply_reference_frame(state_texture(BTN_W, BTN_H, state))
     ink = {"normal": INK_NORMAL, "highlight": INK_HIGHLIGHT,
            "pressed": INK_PRESSED, "disabled": INK_DISABLED}[state]
     size = 16 if len(text) <= 2 else 15
@@ -263,8 +243,7 @@ def make_button(text, state, ratios):
 
 
 def make_close(state):
-    state_index = STATE_ORDER.index(state)
-    canvas = apply_reference_frame(nine_slice(clean_ok_base(state_index), CLOSE_W, CLOSE_H, 4))
+    canvas = apply_reference_frame(state_texture(CLOSE_W, CLOSE_H, state))
     stamp_text(canvas, "X",
                14, {"normal": INK_NORMAL, "highlight": INK_HIGHLIGHT,
                     "pressed": INK_PRESSED, "disabled": INK_DISABLED}[state],
@@ -273,12 +252,8 @@ def make_close(state):
 
 
 def make_panel_canvas(w, h, selected):
-    """页签/页码共用底板：同参考图纹理平铺 + tab n/s 同源的两态亮度差异。"""
-    fill = mirror_tile(texture_patch(w - 2, h - 2), w - 2, h - 2)
-    if selected:
-        fill = scale_color(fill, (1.35, 1.32, 1.28))
-    else:
-        fill = scale_color(fill, (0.92, 0.92, 0.92))
+    """页签/页码共用底板：统一木纹底纹 + tab n/s 同源的两态亮度差异。"""
+    fill = tab_texture(w, h, selected)
     canvas = Image.new("RGB", (w, h))
     canvas.paste(fill, (1, 1))
     return canvas
@@ -293,7 +268,7 @@ def make_tab(text, selected):
 
 
 def make_pager(selected):
-    """分页页码按钮底图：沿用页签构建路径（同参考图纹理、同两态差异、同金框），
+    """分页页码按钮底图：沿用页签构建路径（同纹理、同两态差异、同金框），
     round-12 起固定 28x22 两位数定宽并跳过文字绘制——页码数字由运行时 H3DlgText
     叠加，32x32 原版控制面板没有此控件。"""
     canvas = make_panel_canvas(PAGER_W, PAGER_H, selected)
@@ -302,11 +277,10 @@ def make_pager(selected):
 
 
 def make_tidy(state):
-    """整理按钮（round-13 用户裁定）：与“一键取出/放入”完全同一管线——同四态
-    bv_ok 母版清勾九宫格 + 参考金框 + 状态墨色 + 按压态文字下移 1px，只是尺寸
-    36x22 放进分页栏。文案「整理」烘焙进 PCX（游戏字体不保证中文字形）。"""
-    state_index = STATE_ORDER.index(state)
-    canvas = apply_reference_frame(nine_slice(clean_ok_base(state_index), TIDY_W, TIDY_H))
+    """整理按钮（round-13 用户裁定）：与“一键取出/放入”完全同一管线——同木纹四态
+    底纹 + 参考金框 + 状态墨色 + 按压态文字下移 1px，只是尺寸 36x22 放进分页栏。
+    文案「整理」烘焙进 PCX（游戏字体不保证中文字形）。"""
+    canvas = apply_reference_frame(state_texture(TIDY_W, TIDY_H, state))
     ink = {"normal": INK_NORMAL, "highlight": INK_HIGHLIGHT,
            "pressed": INK_PRESSED, "disabled": INK_DISABLED}[state]
     stamp_text(canvas, TIDY_TEXT, 13, ink, TIDY_W - 6,
@@ -316,9 +290,11 @@ def make_tidy(state):
 
 def make_arrow(glyph, enabled):
     w, h = ARROW_W, ARROW_H
-    fill = mirror_tile(texture_patch(w - 2, h - 2), w - 2, h - 2)
-    if not enabled:
-        fill = scale_color(fill, (0.6, 0.6, 0.6), desaturate=0.6)
+    if enabled:
+        fill = tab_texture(w, h, True)
+    else:
+        # 禁用态：更暗 + 强去饱和（沿用旧观感 0.6 亮度 / 0.6 去饱和）。
+        fill = tinted_texture(w, h, TAB_TINT["n"] * 0.6, desaturate=0.6)
     canvas = Image.new("RGB", (w, h))
     canvas.paste(fill, (1, 1))
     font = load_font(14)
@@ -347,16 +323,14 @@ def save_pcx(im, name):
 def main():
     if not os.path.isdir(OUT):
         os.makedirs(OUT)
-    ratios = measure_states()
-    print("state ratios: highlight=%s pressed=%s disabled=%s"
-          % tuple(tuple(round(v, 3) for v in ratios[k])
-                  for k in ("highlight", "pressed", "disabled")))
+    print("texture block=%s desat=%.2f tints=%s"
+          % (TEXTURE_BLOCK, TEXTURE_DESAT, STATE_TINT))
 
     preview_cells = []
     buttons = [("open", "仓库"), ("take", "一键取出"), ("put", "一键放入")]
     for key, text in buttons:
         for index, state in enumerate(STATE_ORDER):
-            im = make_button(text, state, ratios)
+            im = make_button(text, state)
             save_pcx(im, "btn_%s%d.pcx" % (key, index))
             preview_cells.append(im)
     for index, state in enumerate(STATE_ORDER):
