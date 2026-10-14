@@ -379,6 +379,19 @@
 ### 第十四轮验证边界
 2026-10-14 12:1x（源码冻结 35 个 C++ 文件）：`build.bat` + 审计全绿（0 警告 0 错误、13 项 PASS、**UI flow 212**、PCX 50/290）；素材独立回归 11/11（同轮含第 13 轮的 `PagerRowBottomGap` 一致性断言）；`deploy.bat` 退出码 0，Release 与 Packs SHA256 一致，whui 50 张逐张对拍一致，ini 双侧一致。仓库状态条实际显示、悬停提示与背包逐字同款（含颜色）、离开保留文案、分页行配置边界的实机观感由用户验收。
 
+#### 第十五轮：面板加高一条状态条带，状态条不再压住下边框（2026-10-14 14:0x 实机报告）
+
+用户报告：“仓库高度好像小了点，状态栏超出窗口外了” → 补一句“状态栏的背景图看起来是盖住边框了”。
+
+日志定量：`仓库UI: 状态条 create=1 id=30500 at=(1186,672) 389x18` → 面板原点 y = 672−505 = 167、高 523，状态条底边 672+18 = 690 = 面板底边 690，即**下边距 0**；而原生背包状态条在 405x459 里位于 `(8,433)`，左/右/下三边各留 8px（405−8−389 = 8、459−433−18 = 8）。round-14 按“贴住底边”实现，于是 389×18 的 `HD_TStat.pcx` 正好糊在下边框上。
+
+修法（三处，全部在 `WarehouseUiFlow.hpp`，其余代码只引用常量）：
+1. **面板加高一条状态条带**：`kStatusBandHeight = kStatusHeight + kStatusInsetY = 26`，`kPanelHeight = 459 + 32 + 32 + 26 = 549`（原 523）。HD 整窗背景工厂按 `kPanelWidth × kPanelHeight` 生成画布（日志 `canvas=405x549`），边框随之包住整块面板。
+2. **状态条落进带内并留三边 8px**：`kStatusBandTop = kPanelHeight - kStatusBandHeight = 523`、`kStatusTextY = kStatusBandTop`、新增 `kStatusInsetY = 8`；`static_assert` 锁死 `kStatusTextY + kStatusHeight + kStatusInsetY == kPanelHeight` 与 `kStatusInsetX + kStatusWidth + kStatusInsetX == kPanelWidth`。
+3. **分页行基准从“面板底边”改为“状态条带顶”**：`PagerRowY(gap) = kStatusBandTop - gap - kPagerRowHeight`。因为新状态条带顶 523 正好等于旧面板底边 523，**所有已配置的 `PagerRowBottomGap`（默认仍 37，行顶仍 454）视觉效果一个像素都不动**（用户 `H3RndNew.user.ini` 里本就没有该键，默认层 37 不变）。钳制仍 [18,40]：下限保底与状态条留 18px，上限 40 贴住网格底（行顶 451 = 网格底 450）——新增两条静态断言分别把两端钉住。
+
+验证：`build.bat` + 审计 0 警告 0 错误、15 项 PASS、**UI flow 213**（原 212，新增状态条带与分页基准断言）、PCX 50/290；素材 python 回归 11/11；`deploy.bat` 退出码 0，Release 与 Packs 哈希一致 `93B217B21D5EB341CA7260BCACAD2CECC93E74A575A5C1A3FD80CA7F654C3F2C`，`H3RndNew.default.ini` 双侧一致。**实机待用户验收：面板高度是否合适、状态条是否完整落在面板内且不压边框。**
+
 #### 第十三/十四轮追加修复：状态条地址空间混淆导致仓库界面打不开（2026-10-14 12:19 实机报告）
 
 用户报告“仓库界面打不开了”。日志（`H3RndNew_20261014_121901.log`）定案：三次开窗都**没有** `仓库UI: attached ...` 行，且首帧即 `[Guard] WarehouseUiModal 异常 0xC0000005(访问冲突: 写入 0xC76ABA00) addr=0x0470B609 HD_SOD.dll+0x10FB609`；后两次被 Guard 的异常聚合抑制未重复打。**崩溃 PC 在 HD_SOD 的 `.data` 段**（RVA 0x10FB609 ∈ .data 0x155000..0x1114ECC）= 跳进数据执行 → 间接调用了错误指针。

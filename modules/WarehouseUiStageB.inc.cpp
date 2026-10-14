@@ -1048,7 +1048,7 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
     }
 
     // 完整复用扩展窗口实际背景生成器，保留其 HD 32bit 画布/玩家色/底部状态凹槽。
-    // 第三轮错误：把256x256源图的GetPcx当作405x523可写画布；已彻底删除该路径。
+    // 第三轮错误：把256x256源图的GetPcx当作405x549可写画布；已彻底删除该路径。
     H3DlgPcx16* panelBack = g_wh_ui_skin_factory_ ? g_wh_ui_skin_factory_(
         layout.warehouse.x, layout.warehouse.y, warehouseui::kPanelWidth,
         warehouseui::kPanelHeight, kWhUiPanelBackId_, 1, hero->owner) : nullptr;

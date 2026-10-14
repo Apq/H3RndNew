@@ -62,8 +62,8 @@ void CheckLayoutAndPaging() {
     for (int width : {834, 1024, 1920}) {
         const auto layout = warehouseui::MakeLayout(width, 600, 8, -20);
         Check(layout.fits, "834/1024/1920 layout fits");
-        Check(layout.backpack.height == 459 && layout.warehouse.height == 523,
-              "backpack 459 tall; warehouse panel adds tab+pager rows (523)");
+        Check(layout.backpack.height == 459 && layout.warehouse.height == 549,
+              "backpack 459 tall; warehouse panel adds tab+pager+status rows (549)");
         Check(layout.warehouse.width == 405,
               "warehouse panel is exactly the backpack-sized 405 wide");
         Check(layout.backpack.y == 0, "negative y clamps to zero");
@@ -88,7 +88,7 @@ void CheckLayoutAndPaging() {
 
     const auto right = warehouseui::MakeLayout(1024, 600, 8, 999);
     Check(right.fits && right.side == LayoutSide::Right
-              && right.backpack.y == 77,
+              && right.backpack.y == 51,
           "right layout and positive y clamp");
 
     const auto left = warehouseui::MakeLayout(1024, 600, 500, 20);
@@ -105,8 +105,8 @@ void CheckLayoutAndPaging() {
     Check(squeezed.fits && squeezed.backpack.x == 8
               && squeezed.side == LayoutSide::Right,
           "centered backpack with no side room falls back to left-edge pair");
-    Check(!warehouseui::MakeLayout(1024, 522, 8, 0).fits,
-          "height below 523 fails closed");
+    Check(!warehouseui::MakeLayout(1024, 548, 8, 0).fits,
+          "height below 549 (tab+pager+status bands) fails closed");
     Check(warehouseui::MakeLayout(900, 600, -100, 0).fits,
           "off-screen preferred position uses safe fallback");
 
@@ -772,22 +772,37 @@ void CheckRound13OrderPolicy() {
             && TabSortsDisplay(static_cast<TabKind>(t));
     Check(categoryTabsSort,
           "every category tab keeps the same-item-adjacent display sort");
-    // 默认 37（旧固定位置隐含 32，用户裁定上移 5px）；钳制范围 [18,40]：下限保证
-    // 分页行底不会压到底部状态条（kStatusTextY），上限贴住背包网格底。
+    // 默认 37（旧固定位置隐含 32，用户裁定上移 5px）；钳制范围 [18,40]：基准是底部
+    // 状态条顶（kStatusBandTop，即内容区底边），下限保底 18px 间距，上限贴住背包网格底。
     Check(kPagerRowBottomGapDefault == 37 && kPagerRowY == 454
               && PagerRowY(37) == 454 && PagerRowY(32) == 459
               && PagerRowY(kPagerRowBottomGapMin) == 473
               && PagerRowY(kPagerRowBottomGapMax) == 451
               && kPagerRowBottomGapMin == 18 && kPagerRowBottomGapMax == 40,
           "pager row bottom gap defaults to 37 (5px up from the old 459) and clamps 18..40");
-    // round-14：底部状态条与分页行的共存边界（最小值时分页行底正好贴住状态条顶）。
-    Check(warehouseui::kStatusTextY == 505 && warehouseui::kStatusInsetX == 8
-              && warehouseui::kStatusWidth == 389 && warehouseui::kStatusHeight == 18
-              && PagerRowY(kPagerRowBottomGapMin) + kPagerRowHeight
-                  == warehouseui::kStatusTextY
+    // round-15：面板在最下面多一条状态条带（18 高 + 8 下边距），状态条在带内、与面板
+    // 底边留 8px（与完整背包 405x459 里状态条 (8,433) 同规范，不再压住下边框）。
+    Check(warehouseui::kPanelHeight == 549
+              && warehouseui::kStatusBandTop == warehouseui::kPanelHeight
+                  - warehouseui::kStatusBandHeight
+              && warehouseui::kStatusInsetY == 8
+              && warehouseui::kStatusTextY == 523
+              && warehouseui::kStatusInsetX == 8
+              && warehouseui::kStatusWidth == 389
+              && warehouseui::kStatusHeight == 18
+              && warehouseui::kStatusInsetX + warehouseui::kStatusWidth
+                  + warehouseui::kStatusInsetX == warehouseui::kPanelWidth
               && warehouseui::kStatusTextY + warehouseui::kStatusHeight
-                  == warehouseui::kPanelHeight,
-          "status bar sits on the panel bottom and never overlaps the pager row");
+                  + warehouseui::kStatusInsetY == warehouseui::kPanelHeight,
+          "status bar keeps an 8px bottom inset inside the new panel band");
+    // 分页行与状态条带互不侵占：基准移到状态条顶后，同一配置值的视觉位置不变
+    // （旧面板底 523 == 新状态条顶 523），钳制两端仍分别贴住状态条与网格底。
+    Check(PagerRowY(kPagerRowBottomGapMin) + kPagerRowHeight
+              <= warehouseui::kStatusBandTop
+              && PagerRowY(kPagerRowBottomGapMax) >= warehouseui::kGridOriginDY
+                  + static_cast<int>(warehouseui::kGridRows)
+                      * warehouseui::kGridPitch,
+          "pager row never invades the status band nor the native grid");
 }
 
 void CheckRound14StatusBar() {
