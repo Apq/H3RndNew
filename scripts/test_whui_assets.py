@@ -44,13 +44,13 @@ INK_NORMAL = (255, 231, 160)
 INK_HIGHLIGHT = (255, 248, 214)
 INK_SHADOW = (28, 18, 8)
 
-# round-17：底纹源改为 bv_bg.pcx 里一块无金色木纹（bv_ok*.pcx 母版中央的金色勾号
-# 会污染取样带，旧实现在 highlight 态残留 35 个金色像素、并产生 5px 竖条周期）。
+# round-18：底纹源改为 whui_src/HA_bg_crop.pcx——按用户裁定从 H3Auto 的
+# HA_bg.pcx（680x548）图形正中直裁 66x32，按需从这块正中再裁小尺寸，
+# 全程不平铺、不缩放。旧实现（bv_ok 清勾取样带 / bv_bg 木纹镜像平铺）已废弃。
 # 以下参数必须与 make_whui_assets.py 完全一致；
 # test_texture_constants_match_generator 从生成器源码 AST 逐项核对防漂移。
-TEXTURE_BLOCK = (184, 264, 248, 312)     # bv_bg 内 64x48，无金色像素
-TEXTURE_DESAT = 0.12                     # 木纹饱和 0.740 -> 按钮底纹 0.648
-STATE_TINT = {'normal': 1.0843, 'pressed': 0.845,
+TEXTURE_SOURCE = 'HA_bg_crop.pcx'        # whui_src 内 66x32，实测 0 金色像素
+STATE_TINT = {'normal': 1.0, 'pressed': 0.845,
               'highlight': 1.35, 'disabled': 0.853}
 TAB_TINT = {'n': 0.92, 's': 1.35}
 
@@ -95,22 +95,7 @@ def decode_pcx(data, size):
     return bytes(rgb)
 
 
-def mirror_tile(patch, width, height):
-    """镜像平铺：与生成器同规则，独立实现以便自建无字底板。"""
-    out = Image.new('RGB', (width, height))
-    tile_w, tile_h = patch.size
-    for oy in range(0, height, tile_h):
-        for ox in range(0, width, tile_w):
-            tile = patch
-            if (ox // tile_w) % 2:
-                tile = tile.transpose(Image.FLIP_LEFT_RIGHT)
-            if (oy // tile_h) % 2:
-                tile = tile.transpose(Image.FLIP_TOP_BOTTOM)
-            out.paste(tile, (ox, oy))
-    return out
-
-
-def scale_tinted(image, factor, desaturate=TEXTURE_DESAT):
+def scale_tinted(image, factor, desaturate=0.0):
     """同生成器 scale_color：先去饱和再乘系数，int(v*f+0.5) 后钳制。
 
     不用 Python round（半值取偶会偏）；去饱和必须在乘系数之前，顺序反了结果不同。"""
@@ -128,14 +113,25 @@ def scale_tinted(image, factor, desaturate=TEXTURE_DESAT):
     return out
 
 
-def texture_block():
-    """底纹源：whui_src/bv_bg.pcx 的无金色木纹块（与生成器 TESTURE_BLOCK 同一块）。"""
-    with Image.open(SRC / 'bv_bg.pcx') as master:
-        block = master.convert('RGB').crop(TEXTURE_BLOCK)
-    self_check = [px for px in block.getdata() if is_gold_pixel(px)]
-    if self_check:
-        raise AssertionError('纹理块含 %d 个金色像素（参考图勾号未除净）' % len(self_check))
-    return block
+def texture_base(width, height):
+    """底纹源：whui_src/HA_bg_crop.pcx 按需正中直裁（与生成器 base_crop 同一规则）。
+
+    round-18 起不再平铺——用户裁定“需要多少的底图就从 HA_bg 中间截多少”。
+    源块 66x32 覆盖所有控件；自证尺寸与 0 金色像素，换源时当场拦住标记残留。"""
+    with Image.open(SRC / TEXTURE_SOURCE) as master:
+        block = master.convert('RGB')
+    if block.size != (66, 32):
+        raise AssertionError('底纹源必须是 66x32，实际 %s' % (block.size,))
+    if width > block.width or height > block.height:
+        raise AssertionError('控件 %dx%d 超过底纹源，禁止平铺/缩放' % (width, height))
+    base = block.crop(((block.width - width) // 2,
+                       (block.height - height) // 2,
+                       (block.width - width) // 2 + width,
+                       (block.height - height) // 2 + height))
+    gold = [px for px in base.getdata() if is_gold_pixel(px)]
+    if gold:
+        raise AssertionError('裁切块含 %d 个金色像素（HA_bg 标记未除净）' % len(gold))
+    return base
 
 
 def gold_border(image):
@@ -167,14 +163,12 @@ def reference_frame(canvas):
     return canvas
 
 
-def tab_plate(width, height, factor, desaturate=TEXTURE_DESAT):
-    """页签/页码/箭头一类底板（不导入生成器）：镜像平铺木纹 + 两态亮度 + 固定金框。
+def tab_plate(width, height, factor, desaturate=0.0):
+    """页签/页码/箭头一类底板（不导入生成器）：正中直裁 + 两态亮度 + 固定金框。
 
-    生成器 make_panel_canvas 把整幅 (w,h) 平铺件贴到 (1,1) 并被画布裁掉右下 1px，
-    等价于把 (w-2,h-2) 平铺件贴到 (1,1)——木纹块 64x48 大于所有这类控件，
-    平铺只落下一个周期，两者逐像素等价。箭头禁用态另有 0.6 去饱和，故参数化。"""
-    fill = scale_tinted(mirror_tile(texture_block(), width - 2, height - 2),
-                        factor, desaturate)
+    生成器 make_panel_canvas 把整幅 (w,h) 裁块贴到 (1,1) 并被画布裁掉右下 1px，
+    这里照抄同一构造。箭头禁用态另有 0.6 去饱和，故参数化。"""
+    fill = scale_tinted(texture_base(width, height), factor, desaturate)
     canvas = Image.new('RGB', (width, height))
     canvas.paste(fill, (1, 1))
     gold_border(canvas)
@@ -182,9 +176,8 @@ def tab_plate(width, height, factor, desaturate=TEXTURE_DESAT):
 
 
 def button_plate(width, height, factor):
-    """按钮/整理一类底板（不导入生成器）：整幅平铺（含镜像第二周期）+ 参考金框。"""
-    return reference_frame(
-        scale_tinted(mirror_tile(texture_block(), width, height), factor))
+    """按钮/整理一类底板（不导入生成器）：正中直裁 + 参考金框。"""
+    return reference_frame(scale_tinted(texture_base(width, height), factor))
 
 
 # 与生成器同序的字体候选：文字覆盖集合必须按同一字体度量复刻，否则会误比文字像素。
@@ -208,7 +201,7 @@ def stamp_cover(text, size, max_w, canvas_size, dy):
 
     文字像素是墨色与底纹的混合（边缘半透明），不属于“底纹”，比对时必须跳过；
     这是按字体度量独立算出的精确集合，比按矩形粗跳更严——矩形会连带跳过一大片
-    真正的底纹像素，反而放松了 round-17 要守的“底纹只来自 bv_bg”不变量。"""
+    真正的底纹像素，反而放松了“底纹只来自 HA_bg 中块直裁”的不变量。"""
     font = load_font(size)
     box = font.getbbox(text)
     tw, th = max(1, box[2] - box[0]), max(1, box[3] - box[1])
@@ -311,16 +304,17 @@ class WarehouseAssetsTest(unittest.TestCase):
                          {'state_texture', 'apply_reference_frame', 'stamp_text'})
         self.assertIn('"tidy%d.pcx" % index', source)
         self.assertIn('make_tidy(state)', source)
-        # round-17：底纹不再来自 bv_ok 母版清勾（那是金色残留与 5px 竖条的来源）。
-        for retired in ('clean_ok_base', 'nine_slice', 'texture_patch', 'measure_states'):
+        # round-17 淘汰 bv_ok 清勾取样带路径；round-18 淘汰 bv_bg 木纹镜像平铺路径。
+        for retired in ('clean_ok_base', 'nine_slice', 'texture_patch', 'measure_states',
+                        'mirror_tile', 'tinted_texture'):
             self.assertNotIn('def %s(' % retired, source,
-                             '%s 是 round-17 淘汰的旧底纹路径' % retired)
+                             '%s 是已淘汰的旧底纹路径' % retired)
 
     def test_texture_constants_match_generator(self):
         """底纹常量必须与生成器逐项一致（测试自建底板否则会误判）。
 
-        round-17 起底纹源是 bv_bg.pcx 里一块无金色木纹 + 四态/两态亮度系数；
-        这些数字同时写在测试与生成器里，必须 AST 核对防止只改一边。"""
+        round-18 起底纹源 = whui_src/HA_bg_crop.pcx（HA_bg.pcx 图形正中直裁 66x32）
+        + 四态/两态亮度系数；这些值同时写在测试与生成器里，必须 AST 核对防止只改一边。"""
         source = (ROOT / 'scripts/make_whui_assets.py').read_text(encoding='utf-8-sig')
         tree = ast.parse(source)
         literals = {}
@@ -329,9 +323,7 @@ class WarehouseAssetsTest(unittest.TestCase):
                 for target in node.targets:
                     if isinstance(target, ast.Name):
                         literals[target.id] = node.value
-        self.assertEqual(ast.literal_eval(literals['TEXTURE_BLOCK']), TEXTURE_BLOCK)
-        self.assertAlmostEqual(ast.literal_eval(literals['TEXTURE_DESAT']),
-                               TEXTURE_DESAT, places=6)
+        self.assertEqual(ast.literal_eval(literals['TEXTURE_SOURCE']), TEXTURE_SOURCE)
         self.assertEqual(ast.literal_eval(literals['STATE_TINT']), STATE_TINT)
         self.assertEqual(ast.literal_eval(literals['TAB_TINT']), TAB_TINT)
 
@@ -399,8 +391,8 @@ class WarehouseAssetsTest(unittest.TestCase):
         """自建底板必须与生成器实际出图逐像素一致——否则整理差分参照不可信。
 
         页码仍是同一条 make_panel_canvas 路径，取 28x22 做交叉验证；通过即证明
-        本文件独立重建的无金色木纹/两态亮度/去饱和/金框规则与生产生成器等价，
-        同时说明页码底纹里不存在 bv_ok 母版的勾号残留（bv_bg 块本身就无金色）。"""
+        本文件独立重建的正中直裁/两态亮度/去饱和/金框规则与生产生成器等价，
+        同时说明页码底纹里不存在任何标记残留（HA_bg 中块本身就是 0 金色像素）。"""
         for suffix, selected in (('n', False), ('s', True)):
             with self.subTest(state=suffix):
                 with Image.open(ASSETS / f'pager_{suffix}.pcx') as pager:
@@ -418,7 +410,7 @@ class WarehouseAssetsTest(unittest.TestCase):
         2) 文字覆盖区：字形墨迹、1px 阴影与抗锯齿边缘都是墨色与底纹的混合（实测
            边缘会与底纹差 1 个单位），不属于底纹；覆盖集合由 stamp_cover/glyph_cover
            按生成器同款字体度量独立算出，比按矩形粗跳更严——矩形会连带跳过一大片
-           真正的底纹像素，反而放松了 round-17 要守的“底纹只来自 bv_bg”不变量。"""
+           真正的底纹像素，反而放松了“底纹只来自 HA_bg 中块直裁”的不变量。"""
         width, height = produced.size
         covered = set(skip)
         for y in range(1, height - 1):
@@ -427,13 +419,13 @@ class WarehouseAssetsTest(unittest.TestCase):
                     continue
                 self.assertEqual(
                     produced.getpixel((x, y)), plate.getpixel((x, y)),
-                    '%s 底纹像素 (%d,%d) 与 bv_bg 木纹重建不符' % (label, x, y))
+                    '%s 底纹像素 (%d,%d) 与 HA_bg 中央裁块重建不符' % (label, x, y))
 
     def test_reconstructed_plates_match_textured_assets(self):
-        """页签/箭头/页码底纹必须等于“bv_bg 木纹块 × 状态系数”的独立重建。
+        """页签/箭头/页码底纹必须等于“HA_bg 中央裁块 × 状态系数”的独立重建。
 
-        round-17 的核心不变量：底纹只能来自 bv_bg 的无金色木纹。一旦有人把底纹
-        换回 bv_ok 清勾/取样带平铺（金色残留 + 5px 竖条），这里会逐像素失败。
+        round-18 的核心不变量：底纹只能来自 HA_bg.pcx 图形正中的直裁块。一旦有人
+        把底纹换回 bv_ok 清勾取样带、或 bv_bg 木纹镜像平铺，这里会逐像素失败。
         页签/箭头跳过文字覆盖像素；页码无文字，全部像素都要一致。"""
         cases = [(f'tab{index:02d}{suffix}.pcx', TAB_TINT[tint],
                   stamp_cover(TABS[index], 13, TAB_W - 6, (TAB_W, TAB_H), -1))
@@ -481,7 +473,7 @@ class WarehouseAssetsTest(unittest.TestCase):
         return cases
 
     def test_button_plates_match_independent_rebuild(self):
-        """按钮/关闭/整理四态底纹必须等于“bv_bg 木纹块 × 状态系数”的独立重建。
+        """按钮/关闭/整理四态底纹必须等于“HA_bg 中央裁块 × 状态系数”的独立重建。
 
         文字覆盖像素跳过（字形差分由 test_tidy_states_follow_button_pipeline 覆盖），
         并验证四态亮度序 highlight > normal > pressed/disabled。亮度均值先算后断言，

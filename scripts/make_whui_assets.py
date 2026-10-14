@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """仓库UI（H3RndNew 第十二轮）素材生成器。
 
-按钮底图沿用 H3MegaDesc 的金框母版 bv_frmL.pcx，但底纹（round-17 起）取自
-整窗背景 bv_bg.pcx 里一块经校验无金色像素的斜向木纹——bv_ok*.pcx 母版中央
-被金色勾号占据，勾号投影还污染了两侧取样带，用它重建会得到 5px 周期竖条并
-残留金色（用户报“按钮背景纹理粗糙、含没除净的金色元素”）。
-四态差异由实测的亮度系数给出（STATE_TINT），页签/页码两态沿用 round-12 系数。
-标题不再烘焙PCX，生产代码直接使用原生背包的 H3DlgText 参数。
+按钮底图沿用 H3MegaDesc 的金框母版 bv_frmL.pcx；底纹（round-18 起）直裁自
+whui_src/HA_bg_crop.pcx（取自 H3Auto HA_bg.pcx 图形正中 66x32，用户指定
+“需要多少截多少”），四态 = 底图明暗（STATE_TINT）+ 文字明暗（INK_*）+ 按压
+文字下移 1px；页签/页码两态沿用 round-12 系数。标题不再烘焙PCX，生产代码
+直接使用原生背包的 H3DlgText 参数。
 
   whui/btn_open{0..3}.pcx    66x32  "仓库"
   whui/btn_close{0..3}.pcx   24x24  顶部小X
@@ -84,25 +83,27 @@ def load_rgb(name):
         return im.convert("RGB")
 
 
-# ---- 底纹纹理源（round-17：修“纹理粗糙 / 残留金色元素”） ----
-# 旧实现从 bv_ok*.pcx 中央清勾后，用左右两条 5px 取样带交替平铺重建底纹，两个问题：
-#   1) 5px 周期竖条重复，实机看着“粗糙、怪”；
-#   2) 勾号的暗色投影污染了两侧取样带（实测左带亮度 52.4、右带 59.1，而同排干净列
-#      70.9），且 bv_ok2（highlight）的勾号扩散进取样带内——清勾后仍残留 35 个金色像素。
-# 改为取 bv_bg.pcx（整窗背景，无勾号）里一块经校验无金色的斜向木纹做底纹源：
-# 64x48 远大于任何控件（最大 66x32），镜像平铺后几乎看不出重复周期。
-TEXTURE_BLOCK = (184, 264, 248, 312)   # bv_bg 内 64x48，实测 0 金色像素
-TEXTURE_DESAT = 0.12                   # 木纹饱和 0.740 -> 按钮底纹 0.648
-# 四态亮度：实测“排除金色像素后的均值比”——state1/state0=0.845、state3/state0=0.853；
+# ---- 底纹纹理源（round-18 用户裁定：直裁，不再平铺） ----
+# round-17 用 bv_bg 木纹镜像平铺，用户仍不满意（“现在这样也不行”），指定：
+# “需要多少的底图，就去 D:\GitHub\H3\H3Auto\img\HA_bg.pcx 这个图中间截取所需大小；
+# 四态主要是底图+文字的明暗度变化，和位置变化”。
+# 据此把 HA_bg.pcx（680x548）图形正中的 66x32 直裁存为 whui_src/HA_bg_crop.pcx：
+# 所有控件尺寸（66x32/36x22/28x22/24x24/18x22）都不超过它，小尺寸从它正中再裁，
+# 全程无平铺、无缩放。四态 = 底图明暗（STATE_TINT）+ 文字明暗（INK_*）+ 按压
+# 文字下移 1px；页签/页码两态沿用 TAB_TINT。
+# 实测该块：lum 52.4±6.0、饱和 0.654（按钮目标 0.648）——饱和已天然匹配，
+# 无需再去饱和；金色像素 0（自证，非 0 直接 raise）。
+TEXTURE_SOURCE = "HA_bg_crop.pcx"   # whui_src 内 66x32，取自 H3Auto HA_bg.pcx 图形正中
+# 实测“排除金色像素后的均值比”：state1/state0=0.845、state3/state0=0.853；
 # highlight 取 1.35（与页签选中态同款；bv_ok2 的白描边会把比值虚高到 1.53，直接用会过曝）。
-# normal 的 1.0843 是把木纹 52.2 校准到按钮底纹 56.7。
+# normal=1.0：HA_bg 本身就是用户想要的观感，不再做亮度校准。
 STATE_TINT = {
-    "normal": 1.0843,
+    "normal": 1.0,
     "pressed": 0.845,
     "highlight": 1.35,
     "disabled": 0.853,
 }
-TAB_TINT = {"n": 0.92, "s": 1.35}      # 沿用 round-12 两态系数（本轮只换纹理源）
+TAB_TINT = {"n": 0.92, "s": 1.35}      # 沿用 round-12 两态系数（只换底纹源）
 
 
 def is_gold_pixel(px):
@@ -112,43 +113,37 @@ def is_gold_pixel(px):
 
 
 def texture_source():
-    """底纹源：bv_bg 的无金色木纹块（自证无金色——换源时当场拦住勾号残留）。"""
-    block = load_rgb("bv_bg.pcx").crop(TEXTURE_BLOCK)
+    """底纹源：HA_bg_crop.pcx（自证 66x32 且无金色像素——换源时当场拦住标记残留）。"""
+    block = load_rgb(TEXTURE_SOURCE)
+    if block.size != (66, 32):
+        raise ValueError("底纹源必须是 66x32，实际 %s" % (block.size,))
     gold = sum(1 for px in block.getdata() if is_gold_pixel(px))
     if gold:
-        raise ValueError("TEXTURE_BLOCK 含 %d 个金色像素（参考图勾号未除净）" % gold)
+        raise ValueError("底纹源含 %d 个金色像素（参考图标记未除净）" % gold)
     return block
 
 
-def tinted_texture(w, h, factor, desaturate=TEXTURE_DESAT):
-    """镜像平铺的木纹底纹 + 状态色调（无勾号、无 5px 竖条周期）。"""
-    fill = mirror_tile(texture_source(), w, h)
-    return scale_color(fill, (factor, factor, factor), desaturate=desaturate)
+def base_crop(w, h):
+    """按需从源块正中直裁（round-18 用户裁定：需要多少截多少，不平铺、不缩放）。"""
+    src = texture_source()
+    if w > src.size[0] or h > src.size[1]:
+        raise ValueError("控件 %dx%d 超过底纹源 %dx%d，禁止平铺/缩放"
+                         % (w, h, src.size[0], src.size[1]))
+    x0 = (src.size[0] - w) // 2
+    y0 = (src.size[1] - h) // 2
+    return src.crop((x0, y0, x0 + w, y0 + h))
 
 
 def state_texture(w, h, state):
-    """按钮四态底纹（normal/pressed/highlight/disabled）。"""
-    return tinted_texture(w, h, STATE_TINT[state])
+    """按钮四态底纹：底图 + 明暗度变化（位置变化由文字层按压 +1px 负责）。"""
+    k = STATE_TINT[state]
+    return scale_color(base_crop(w, h), (k, k, k))
 
 
 def tab_texture(w, h, selected):
     """页签/页码/箭头底纹（选中/未选中两态，沿用 round-12 系数）。"""
-    return tinted_texture(w, h, TAB_TINT["s" if selected else "n"])
-
-
-def mirror_tile(patch, w, h):
-    """镜像平铺，避免整块复制出现明显接缝。"""
-    out = Image.new("RGB", (w, h))
-    pw, ph = patch.size
-    for oy in range(0, h, ph):
-        for ox in range(0, w, pw):
-            tile = patch
-            if (ox // pw) % 2:
-                tile = tile.transpose(Image.FLIP_LEFT_RIGHT)
-            if (oy // ph) % 2:
-                tile = tile.transpose(Image.FLIP_TOP_BOTTOM)
-            out.paste(tile, (ox, oy))
-    return out
+    k = TAB_TINT["s" if selected else "n"]
+    return scale_color(base_crop(w, h), (k, k, k))
 
 
 def scale_color(im, factors, desaturate=0.0):
@@ -208,9 +203,9 @@ def gold_border(im):
 
 STATE_ORDER = ("normal", "pressed", "highlight", "disabled")
 
-# round-17 已删除 clean_ok_base/nine_slice：它们从 bv_ok*.pcx 母版中央清勾后用
-# 左右取样带交替平铺 + 九宫格 NEAREST 拉伸重建底纹，正是“纹理粗糙 + 残留金色”
-# 的来源。底纹现在统一由 tinted_texture() 从 bv_bg 木纹块生成。
+# round-17 删除 clean_ok_base/nine_slice（bv_ok 清勾取样带 = 金色残留 + 5px 竖条来源）；
+# round-18 删除 mirror_tile/tinted_texture（bv_bg 木纹镜像平铺，用户仍不满意）——
+# 底纹统一由 base_crop() 从 HA_bg 中块按需直裁生成。
 
 
 def apply_reference_frame(canvas):
@@ -294,7 +289,8 @@ def make_arrow(glyph, enabled):
         fill = tab_texture(w, h, True)
     else:
         # 禁用态：更暗 + 强去饱和（沿用旧观感 0.6 亮度 / 0.6 去饱和）。
-        fill = tinted_texture(w, h, TAB_TINT["n"] * 0.6, desaturate=0.6)
+        k = TAB_TINT["n"] * 0.6
+        fill = scale_color(base_crop(w, h), (k, k, k), desaturate=0.6)
     canvas = Image.new("RGB", (w, h))
     canvas.paste(fill, (1, 1))
     font = load_font(14)
@@ -323,8 +319,8 @@ def save_pcx(im, name):
 def main():
     if not os.path.isdir(OUT):
         os.makedirs(OUT)
-    print("texture block=%s desat=%.2f tints=%s"
-          % (TEXTURE_BLOCK, TEXTURE_DESAT, STATE_TINT))
+    print("texture source=%s %s tints=%s tab_tints=%s"
+          % (TEXTURE_SOURCE, texture_source().size, STATE_TINT, TAB_TINT))
 
     preview_cells = []
     buttons = [("open", "仓库"), ("take", "一键取出"), ("put", "一键放入")]
