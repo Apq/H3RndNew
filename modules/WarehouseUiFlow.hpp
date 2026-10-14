@@ -97,27 +97,25 @@ inline constexpr bool LayoutPreservesBackpackPosition(const Layout& layout,
 inline constexpr int kBackpackWidth = 405;    // HD 完整背包视觉区（0x01006620 实测）
 inline constexpr int kBackpackHeight = 459;
 inline constexpr int kPanelWidth = 405;       // 仓库面板宽与完整背包一致（用户裁定）
-// 面板高 = 完整背包 459 + Tab 行 32 + 分页行 32 + 状态条带 26 = 549（用户裁定：
-// 抄整个扩展界面，顶部预留 Tab 页、网格下多一个分页行，最底部再补一条状态条带）。
+// 面板高 = 完整背包 459 + Tab 行 32 + 分页行 32 = 523（用户裁定：抄整个扩展界面，
+// 顶部预留 Tab 页、网格下多一个分页行）。round-15 曾为放状态条加到 549，实机后用户
+// 裁定“高度刚刚是不用调整的”→ 回到 523，状态条改在面板内上抬 8px（见下）。
 inline constexpr int kTabRowHeight = 32;      // Tab 行预留（本版不画控件）
 inline constexpr int kPagerRowHeight = 32;    // 分页行（< > 与计数）
-// 底部状态条带（round-15 用户裁定“状态栏超出窗口外了、高度好像小了点”）：
-// 面板在最下面再加一条状态条带 = 状态条 18 高 + 下边距 8，与完整背包同规范
-// （原生状态条 389x18 在 405x459 里位于 (8,433)，左/右/下三边各留 8px）。
+// 底部状态条带（round-15 用户裁定“状态栏盖住边框了”，round-16 用户裁定高度回 523）：
+// 面板高度不动，状态条在面板**内部**、距左/右/下各 8px，与完整背包原生状态条同规范
+// （原生 389x18 在 405x459 里位于 (8,433)：左 8、右 8、下 8），因此不再压住下边框。
 inline constexpr int kStatusInsetX = 8;
 inline constexpr int kStatusInsetY = 8;
 inline constexpr int kStatusWidth = 389;
 inline constexpr int kStatusHeight = 18;
 inline constexpr int kStatusBandHeight = kStatusHeight + kStatusInsetY; // 26
-inline constexpr int kPanelHeight = 459 + kTabRowHeight + kPagerRowHeight
-    + kStatusBandHeight; // 549
-// 状态条带顶 = 状态条顶（分页行的基准，见 PagerRowY）：549-26 = 523，正好等于旧面板
-// 底边，所以把基准从面板底边改到这里，既让状态条彻底落进面板内，又不改变任何已配置
-// 好的 PagerRowBottomGap 的视觉效果。
-inline constexpr int kStatusBandTop = kPanelHeight - kStatusBandHeight; // 523
-inline constexpr int kStatusTextY = kStatusBandTop;                     // 523
+inline constexpr int kPanelHeight = 459 + kTabRowHeight + kPagerRowHeight; // 523
+// 状态条带顶（= 状态条顶）：523-26 = 497，底边 515，距面板底 8px。
+inline constexpr int kStatusBandTop = kPanelHeight - kStatusBandHeight; // 497
+inline constexpr int kStatusTextY = kStatusBandTop;                     // 497
 static_assert(kStatusTextY + kStatusHeight + kStatusInsetY == kPanelHeight,
-    "状态条带必须贴住面板底边并留 8px 下边距（与背包状态条同构）");
+    "状态条必须留在面板内并留 8px 下边距（与背包状态条同构，不压住边框）");
 static_assert(kStatusInsetX + kStatusWidth + kStatusInsetX == kPanelWidth,
     "状态条左右边距必须与下边距同规范（8px）");
 inline constexpr int kPanelGap = 8;
@@ -204,28 +202,28 @@ inline constexpr int kGridHitSize = 47;
 inline constexpr int kGridDefSize = 44;
 inline constexpr int kGridDefDX = 2;
 inline constexpr int kGridDefDY = 1;
-// 分页行与“底部内容区”之间的空隙（round-13 用户裁定入配置 [WarehouseUI]
-// PagerRowBottomGap，整理按钮与页码数字整行一起移动）。**基准是状态条顶**（内容区
-// 底边）而不是面板底边——这样面板以后再加高，已调好的 37 依旧贴在原位置不动
-// （旧面板底 523 == 新状态条顶 523）。旧版隐含 32（行顶 459=82+369+8），用户实测
+// 分页行距面板底边的空隙（round-13 用户裁定入配置 [WarehouseUI] PagerRowBottomGap，
+// 整理按钮与页码数字整行一起移动）；旧版隐含 32（行顶 459=82+369+8），用户实测
 // “过低了点”→ 默认上移 5px 即 37（行顶 454）。
-// 钳制 [18,40]：row bottom = kStatusTextY-gap 不得越过状态条顶，即 gap ≥ 0（取 18
-// 保底留 18px 间距）；上限 40 = 贴住背包网格底（行顶 451）。
+// 钳制 [26,40]：下限 26 保证分页行底（523-gap）不越过面板内状态条顶（kStatusTextY
+// =497，即 row bottom ≤ 497 → gap ≥ 26）；上限 40 贴住背包网格底（行顶 451=网格底 450）。
+// round-15 曾一度把基准改到状态条顶，round-16 用户裁定面板高度回 523 后基准回到面板
+// 底边（与 round-13 语义一致，默认 37 仍给出行顶 454，视觉不变）。
 inline constexpr int kPagerRowBottomGapDefault = 37;
-inline constexpr int kPagerRowBottomGapMin = 18;
+inline constexpr int kPagerRowBottomGapMin = 26;
 inline constexpr int kPagerRowBottomGapMax = 40;
 inline constexpr int PagerRowY(int bottomGap) noexcept {
-    return kStatusBandTop - bottomGap - kPagerRowHeight;
+    return kPanelHeight - bottomGap - kPagerRowHeight;
 }
 // 默认配置下的分页行顶（454），供纯断言与文档引用；运行期取
 // PagerRowY(g_wh_ui_layout_cfg_.pagerRowBottomGap)。
 inline constexpr int kPagerRowY = PagerRowY(kPagerRowBottomGapDefault);
 inline constexpr std::size_t kPagerVisibleButtons = static_cast<std::size_t>(
     FittingPagerButtons(kPanelWidth, kPagerNumberWidth, kPagerButtonGap)); // 10
-// round-15 验收：默认空隙下分页行底（454+32=486）与状态条带顶（523）之间留 37px，
-// 两端钳制值下也互不侵占（见 kGridRows 处的静态断言）。
-static_assert(PagerRowY(kPagerRowBottomGapMin) + kPagerRowHeight <= kStatusBandTop,
-    "最小空隙时分页行不得越过状态条顶");
+// 面板内状态条与分页行互不侵占：默认 37 时分页行底 486、状态条顶 497，留 11px；
+// 最小 26 时分页行底正好贴住状态条顶 497（不遮挡）。
+static_assert(PagerRowY(kPagerRowBottomGapMin) + kPagerRowHeight <= kStatusTextY,
+    "最小空隙时分页行不得越过面板内状态条顶");
 
 // 状态条悬停文案（round-14，与原生背包 mouse-over 完全同构）：
 // 普通宝物 = 宝物名；法术卷轴（id==1）= `宝物名. {法术名.}`，即原生 wsprintf
