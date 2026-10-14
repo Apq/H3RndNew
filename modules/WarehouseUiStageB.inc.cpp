@@ -284,13 +284,6 @@ static bool WarehouseUiBackpackFilter_(std::vector<char>& include) noexcept {
     return true;
 }
 
-static bool WarehouseUiBackpackHasMatch_() noexcept {
-    std::vector<char> include;
-    if (!WarehouseUiBackpackFilter_(include)) return false;
-    for (char item : include) if (item) return true;
-    return false;
-}
-
 static bool WarehouseUiOwns_(H3BaseDlg* dlg, H3DlgItem* item) noexcept
 {
     if (!dlg || !item) return false;
@@ -372,17 +365,11 @@ static void WarehouseUiRefresh_(H3BaseDlg* dlg, bool redraw) noexcept
             slot->HideDeactivate();
         }
     }
-    // 一键操作是全量语义（round-7）：取出只看仓库是否全空/背包是否满。
-    const bool takeDisabled = records.empty()
-        || g_wh_ui_live_.hero->backpackCount >= 64 || WarehouseUiHeld_() || g_wh_locked_ != 0;
-    const bool putDisabled = !WarehouseUiBackpackHasMatch_()
-        || WarehouseUiHeld_() || g_wh_locked_ != 0;
-    if (WarehouseUiOwns_(dlg, g_wh_ui_live_.putAllButton))
-        g_wh_ui_live_.putAllButton->EnableItem(!putDisabled);
-    if (WarehouseUiOwns_(dlg, g_wh_ui_live_.takeAllButton))
-        g_wh_ui_live_.takeAllButton->EnableItem(!takeDisabled);
-    WarehouseUiSetButtonDisabled_(3, putDisabled);
-    WarehouseUiSetButtonDisabled_(2, takeDisabled);
+    // round-20（用户裁定）：一键取出/一键放入不再判断“能不能取放”，按钮不做任何
+    // 禁用/启用写入（原来这里按 records 是否为空、背包是否满、是否有手持物品、是否
+    // 锁库来 EnableItem + 置禁用位）。五按钮状态因此只剩普通/按下/悬停。
+    // 事务侧的安全判定保留在各自的动作分支里（见 CLICK 分派处的 WarehouseUiHeld_()
+    // 与 g_wh_locked_ 守卫），不会因为去掉视觉禁用而真的误操作。
     WarehouseUiRefreshTabs_(dlg, false);
     // 整理按钮（round-8/13）：仅“常规”页签且展开时可见。判定按“页签种类”而不是顺序
     // 下标——TabOrder 可配置，常规不一定在首位。round-13 起并入主按钮模型
@@ -929,6 +916,8 @@ static void WarehouseUiSetExpanded_(H3BaseDlg* dlg, bool expanded,
 {
     if (!dlg || g_wh_ui_live_.dialog != dlg || g_wh_ui_live_.expanded == expanded)
         return;
+    // round-20：展开/收起整体显隐面板项，先把按钮的按下/悬停/焦点残留清干净。
+    WarehouseUiResetButtonInput_();
     if (!expanded) {
         WarehouseUiSetNativeIconLayer_(dlg, false);
         for (std::size_t i = g_wh_ui_live_.panelItemCount; i > 0; --i)

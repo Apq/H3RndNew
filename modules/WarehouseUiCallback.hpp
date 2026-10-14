@@ -35,10 +35,21 @@ inline constexpr int ButtonIndexFromId(int id) noexcept {
         : id == kWhUiTidyButtonId ? 4 : -1;
 }
 // 四态优先级：禁用 > 按下 > 悬停 > 普通（与原实现同序，只改了按下位的来源）。
+// round-20 起生产路径不再传 disabled（一键取出/放入不做“能不能取放”判断），但仍保留
+// 该参数与优先级：它是纯函数，也是这一组状态的唯一定义处。
 inline constexpr int ButtonVisualState(bool disabled, bool pressed,
                                       bool hovered) noexcept {
     return disabled ? 3 : pressed ? 1 : hovered ? 2 : 0;
 }
+// round-20（用户裁定）：五个按钮都不需要“焦点/选中”语义，每次刷新统一清掉这两位。
+// 原生 item 状态字（+0x16，H3CstDlgControls.hpp 命名 vs 实测语义）：
+//   0x01 PRESSED、0x02 ACTIVE、0x04 VISIBLE、0x08 SHADED、0x10 SELECTED、
+//   0x20 禁用（H3DlgItem::IsEnabled() 返回 !(state & 0x20)，置位即禁用，枚举名
+//   ENABLED 是命名笔误）、0x40 FOCUSED。
+// 其中 SELECTED(0x10) 会让原生 H3DlgDefButton::vDrawToWindow(0x00456620) 改用
+// [item+0x40] 帧来画，是唯一能表现“选中/焦点”的位；原生 vGetFocus/vLoseFocus
+// 是空 ret（0x0051BD60），因此焦点位只能由别处置上——一律清除最稳。
+inline constexpr unsigned kWhUiButtonFocusBits = 0x10 | 0x40;
 inline constexpr bool IsWarehouseControlId(int id) noexcept {
     // 30052 整理按钮（仅常规页签可见）；30060..30202 覆盖关闭/打开/一键取出/一键
     // 放入与 30100..30163 仓库槽；30300..30311 页签；30400..30411 分页页码按钮

@@ -76,3 +76,7 @@ Release/*
 !Release/*.zip
 .cowork-temp
 .hermes-tmp*
+
+# python bytecode cache (scripts/ 下的素材生成与测试脚本)
+__pycache__/
+*.pyc

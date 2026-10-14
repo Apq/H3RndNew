@@ -1238,6 +1238,17 @@ void RunWarehouseUiFlowTests_() {
               && warehouseui::ButtonVisualState(true, false, false) == 3
               && warehouseui::ButtonVisualState(true, true, true) == 3,
           "visual state order stays disabled > pressed > hover > normal");
+    // round-20（用户裁定）：五个按钮都不需要“焦点/选中”语义，刷新时统一清掉
+    // SELECTED(0x10)/FOCUSED(0x40)。这里钉住两位的取值与“只清这两位、其余位不动”。
+    Check(warehouseui::kWhUiButtonFocusBits == 0x50,
+          "round-20 focus bits cover SELECTED(0x10) | FOCUSED(0x40)");
+    {
+        const unsigned all = 0xFFFFu;
+        const unsigned cleared = all & ~warehouseui::kWhUiButtonFocusBits;
+        Check((cleared & 0x10u) == 0 && (cleared & 0x40u) == 0
+                  && (cleared & 0x01u) != 0 && (cleared & 0x04u) != 0,
+              "clearing focus bits leaves PRESSED/VISIBLE and the rest intact");
+    }
 
     if (g_failures != 0) {
         std::fprintf(stderr, "warehouse UI flow: %d/%d checks failed\n",

@@ -217,14 +217,26 @@ static void WarehouseUiCacheImages_(H3DlgPcx* source) noexcept {
 }
 static bool WarehouseUiImagesReady_() noexcept { return g_wh_ui_images_ready_; }
 
+// round-20（用户裁定）：五个按钮都不需要“焦点/选中”语义——SELECTED(0x10) 会让原生
+// H3DlgDefButton::vDrawToWindow 改用 [item+0x40] 帧、FOCUSED(0x40) 是焦点位。原生
+// vGetFocus/vLoseFocus 是空 ret，焦点位只可能被别处（对话框/HD 包装）置上，所以这里
+// 每次刷新都清掉这两位，按钮永远不会“看起来有焦点”。
+static void WarehouseUiClearButtonFocusBits_(WarehouseButton_& b) noexcept {
+    if (!WarehouseUiVisualOwns_(g_wh_ui_visual_dialog_, b.def)) return;
+    UINT16& flags = *reinterpret_cast<UINT16*>(reinterpret_cast<BYTE*>(b.def) + 0x16);
+    flags = static_cast<UINT16>(flags
+        & ~static_cast<UINT16>(warehouseui::kWhUiButtonFocusBits));
+}
+
 static void WarehouseUiRefreshButton_(int index) noexcept {
     WarehouseButton_& b = g_wh_ui_buttons_[index];
     if (!WarehouseUiVisualOwns_(g_wh_ui_visual_dialog_, b.def)
         || !WarehouseUiVisualOwns_(g_wh_ui_visual_dialog_, b.visual)) return;
-    const UINT16 flags = *reinterpret_cast<UINT16*>(reinterpret_cast<BYTE*>(b.def) + 0x16);
-    // round-19：按下位 = 自有 pressed 或 原生 +0x16&1（两者任一为真）；禁用位仍最优先。
-    const int state = warehouseui::ButtonVisualState((flags & 0x20) != 0,
-        b.pressed || (flags & 1) != 0, b.hovered);
+    // round-20（用户裁定）：状态只看自有 pressed/hovered（普通/按下/悬停三态）。
+    // 不再读原生按下位（+0x16&1）与禁用位（+0x16&0x20）：一键取出/放入不做“能不能
+    // 取放”的判断，五按钮状态一致；同时清掉 SELECTED/FOCUSED，避免“看起来有焦点”。
+    WarehouseUiClearButtonFocusBits_(b);
+    const int state = warehouseui::ButtonVisualState(false, b.pressed, b.hovered);
     b.visual->SetPcx(g_wh_ui_button_images_[index][state]);
 }
 // round-19（用户裁定）：五个按钮的“按下→弹起”必须一致可见。自己维护 pressed 后
@@ -267,6 +279,16 @@ static void WarehouseUiSetButtonPressedByIdOrPoint_(H3BaseDlg* dlg, H3Msg* msg) 
 static void WarehouseUiClearAllButtonsPressed_() noexcept {
     for (int i = 0; i < kWhUiButtonCount_; ++i) WarehouseUiSetButtonPressed_(i, false);
 }
+// round-20：展开/收起会整体显隐面板项，切换前的按下/悬停标记此后不一定再收到
+// MOUSE_OVER 去纠正，残留下来就表现为“按钮看起来有焦点”。切换时统一清干净。
+static void WarehouseUiResetButtonInput_() noexcept {
+    for (int i = 0; i < kWhUiButtonCount_; ++i) {
+        WarehouseButton_& b = g_wh_ui_buttons_[i];
+        b.hovered = false;
+        WarehouseUiSetButtonPressed_(i, false);
+        WarehouseUiClearButtonFocusBits_(b);
+    }
+}
 // 专门的视觉Draw替换：不画原来的iOkay图标，不改变其余14个vtable槽。
 static void __fastcall WarehouseUiButtonDraw_(void* self, void*) {
     __try {
@@ -304,13 +326,9 @@ static WarehouseButtonPair_ WarehouseUiCreateButton_(int index, int x, int y, in
     *reinterpret_cast<void***>(b.def) = b.novtbl;
     return pair;
 }
-static void WarehouseUiSetButtonDisabled_(int index, bool disabled) noexcept {
-    WarehouseButton_& b = g_wh_ui_buttons_[index];
-    if (!WarehouseUiVisualOwns_(g_wh_ui_visual_dialog_, b.def)) return;
-    UINT16& flags = *reinterpret_cast<UINT16*>(reinterpret_cast<BYTE*>(b.def) + 0x16);
-    flags = disabled ? static_cast<UINT16>(flags | 0x20) : static_cast<UINT16>(flags & ~0x20);
-    WarehouseUiRefreshButton_(index);
-}
+// round-20（用户裁定）：一键取出/放入不再判断“能不能取放”，按钮不再写任何禁用位，
+// 因此原来的 WarehouseUiSetButtonDisabled_ 整个删除（五按钮状态只剩普通/按下/悬停）。
+// 事务侧的安全判定（手持物品、仓库锁）仍由 StageB 的动作分支自己把守，与本视觉无关。
 // 按钮对显隐（round-13）：视觉件与原生命中按钮同步显示/隐藏；隐藏用
 // HideDeactivate（不显示也不参与 0x5FF9A0 命中）。整理按钮按页签种类切换，
 // 其余按钮仍随展开态整体处理。
@@ -360,7 +378,8 @@ static void WarehouseUiRestoreButtons_(H3BaseDlg* dlg) noexcept {
         if (WarehouseUiVisualOwns_(dlg, b.def) && b.originalVtable
             && *reinterpret_cast<void***>(b.def) == b.novtbl)
             *reinterpret_cast<void***>(b.def) = b.originalVtable;
-        b.def = nullptr; b.visual = nullptr; b.originalVtable = nullptr; b.hovered = false;
+        b.def = nullptr; b.visual = nullptr; b.originalVtable = nullptr;
+        b.hovered = false; b.pressed = false;
         // novtbl不清零：已失去归属的对象不能写，也不能破坏其可能仍使用的表。
     }
     for (std::size_t i = 0; i < g_wh_ui_visual_count_; ++i) {
