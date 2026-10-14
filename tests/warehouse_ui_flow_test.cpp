@@ -619,7 +619,9 @@ void CheckRound6CallbackAndIcons() {
 }
 
 // round-8：原生宝物表 position 是 1-based（0 = 无装备位置），必须先归一化再分类；
-// 走查用户实测的三个关键点：头部(1→0)、胸甲(6→5)、戒指(7/8→6/7)、杂物5(19→18)。
+// 走查实机定案的分段编码：raw 1..6=头..胸甲(+1)、raw 7=戒指族(单值)、raw 8 起规范
+// 0-based（8=靴子、9..12=杂物1..4、18=杂物5）——第十轮用户实测戒指页=戒指+靴子、
+// 靴子页全是杂物、杂物页空，否定第八轮“均匀 1-based”推断的高段部分。
 void CheckRound8SlotBaseAndSorting() {
     using warehouseui::NormalizeArtifactTableSlot;
     using warehouseui::SlotTab;
@@ -629,18 +631,25 @@ void CheckRound8SlotBaseAndSorting() {
               && NormalizeArtifactTableSlot(1) == 0
               && NormalizeArtifactTableSlot(6) == 5
               && NormalizeArtifactTableSlot(7) == 6
-              && NormalizeArtifactTableSlot(8) == 7
-              && NormalizeArtifactTableSlot(19) == 18
+              && NormalizeArtifactTableSlot(8) == 8
+              && NormalizeArtifactTableSlot(9) == 9
+              && NormalizeArtifactTableSlot(12) == 12
+              && NormalizeArtifactTableSlot(18) == 18
+              && NormalizeArtifactTableSlot(19) == 19
               && NormalizeArtifactTableSlot(23) == 23,
-          "artifact table slot is decoded as 1-based with 0 meaning no position");
+          "artifact table slot decodes piecewise: +1 up to the single ring value, "
+          "canonical from feet onward");
     Check(SlotTab(NormalizeArtifactTableSlot(1)) == TabKind::Head
               && SlotTab(NormalizeArtifactTableSlot(2)) == TabKind::Shoulders
               && SlotTab(NormalizeArtifactTableSlot(3)) == TabKind::Neck
               && SlotTab(NormalizeArtifactTableSlot(6)) == TabKind::Torso
               && SlotTab(NormalizeArtifactTableSlot(7)) == TabKind::Ring
-              && SlotTab(NormalizeArtifactTableSlot(8)) == TabKind::Ring
-              && SlotTab(NormalizeArtifactTableSlot(19)) == TabKind::Misc,
-          "head/cloak/neck/torso/ring/misc5 land on the tabs the user expects");
+              && SlotTab(NormalizeArtifactTableSlot(8)) == TabKind::Feet
+              && SlotTab(NormalizeArtifactTableSlot(9)) == TabKind::Misc
+              && SlotTab(NormalizeArtifactTableSlot(10)) == TabKind::Misc
+              && SlotTab(NormalizeArtifactTableSlot(18)) == TabKind::Misc,
+          "head/shoulders/neck/torso/ring/feet/misc land on the tabs the user "
+          "verified in three observation rounds");
 
     // 相同道具必须连续（展示层）。
     State state;

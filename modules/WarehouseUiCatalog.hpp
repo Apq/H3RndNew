@@ -50,11 +50,20 @@ inline constexpr int kSlotMax = 18;
 
 inline constexpr int kRegularTab = 0;
 
-// H3ArtifactSetup::position 在当前 HD_SOD 运行时表中以 1 为首个装备槽，
-// 0 表示无装备位置；先归一化为本文件使用的 0-based eArtifactSlots。
+// H3ArtifactSetup::position 的运行时编码（2026-10-14 第十轮实机定案，分段而非整体偏移）：
+//   raw 0    = 无装备位；
+//   raw 1..6 = 头/肩/颈/右手/左手/胸甲（比 0-based 规范整体 +1）；
+//   raw 7    = 戒指族（单值；规范里 6/7 双戒指位在表中只出现一个）；
+//   raw 8+   = 与规范 0-based 完全一致：8=靴子、9..12=杂物1..4、13..16=战争机器、
+//              17=魔法书、18=杂物5。
+// 证据链：第八轮修前症状（头部空、肩部显示头、戒指页混胸甲）锁定 raw 1..6 偏移；
+// 第十轮修后症状（戒指页=戒指+靴子、靴子页全是杂物、杂物页空）锁定 raw 7=戒指、
+// raw 8=靴子、raw 9=杂物族——高段本就与规范一致，均匀 -1 反而把它们错位一格。
 inline int NormalizeArtifactTableSlot(int rawSlot) noexcept {
     if (rawSlot <= 0) return kSlotNone;
-    return rawSlot <= kSlotMax + 1 ? rawSlot - 1 : rawSlot;
+    if (rawSlot <= 6) return rawSlot - 1;
+    if (rawSlot == 7) return 6;   // 戒指族归到规范的右戒指位（SlotTab 6/7 同为 Ring）
+    return rawSlot;               // 8..18 已是规范 0-based
 }
 
 // 穿戴位置 → 位置页签；超出原版范围（模组）仍归入“装备”。
