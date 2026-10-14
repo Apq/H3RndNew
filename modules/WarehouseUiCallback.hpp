@@ -41,6 +41,17 @@ inline constexpr int ButtonVisualState(bool disabled, bool pressed,
                                       bool hovered) noexcept {
     return disabled ? 3 : pressed ? 1 : hovered ? 2 : 0;
 }
+// round-20 第二次修正（用户裁定，原话：“我不需要焦点效果,需要鼠标按下时的压住效果和
+// 松开时的弹起效果(不带焦点效果)”）：这五个按钮的外观**只有两态——普通与按下**。
+// 关键点：按住按钮时鼠标必然在按钮上，所以只要“按下位”没置上，显示的就会是发亮的
+// 悬停态——用户看到的“焦点效果”正是这一格（四态素材里 state2）。因此这里彻底不用
+// 悬停态(2)与禁用态(3)，按下位取“自维护 pressed”或“原生 PRESSED(+0x16 & 1)”任一
+// 为真：原生位由游戏自己在鼠标按下时置上，不依赖我们对坐标/消息的判定，是压住感的
+// 兜底来源（第 19 轮实机可见的压住感就来自它）。
+inline constexpr int ButtonVisualStateForPress(bool selfPressed,
+                                               bool nativePressed) noexcept {
+    return (selfPressed || nativePressed) ? 1 : 0;
+}
 // round-20（用户裁定）：五个按钮都不需要“焦点/选中”语义，每次刷新统一清掉这两位。
 // 原生 item 状态字（+0x16，H3CstDlgControls.hpp 命名 vs 实测语义）：
 //   0x01 PRESSED、0x02 ACTIVE、0x04 VISIBLE、0x08 SHADED、0x10 SELECTED、

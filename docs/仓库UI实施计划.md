@@ -390,7 +390,7 @@
 | 状态字位语义 | `H3DlgItem::IsEnabled()` 返回 `!(state & 0x20)` → **`0x20` 置位＝禁用**（`H3CstDlgControls.hpp` 里 `ENABLED = 0x0020` 是命名笔误）。故原有 `(flags & 0x20) ? 3 : …` 极性**本来就对**，不能反改 |
 | “焦点”到底是哪一位 | `H3DlgDefButton::vDrawToWindow`（**0x00456620**）按状态字选帧：`0x10 SELECTED` 且未按下 → 画 `[item+0x40]` 帧；`0x28 = SHADED\|DISABLED` → 画 `[item+0x3c]` 禁用帧；否则按下画 `[item+0x38]`、平常画 `[item+0x34]`。**`SELECTED(0x10)` 才是唯一的“选中/焦点”表现位** |
 | 谁在置焦点位 | 原生 `vGetFocus`/`vLoseFocus`（虚表槽 10/11，DEF 按钮虚表 `0x63BB54`+0x28/+0x2C）**都指向 `0x0051BD60` = 裸 `ret`**，即原生焦点虚函数什么都不做；对全 exe 扫描对 `[reg+0x16]` 的位测试点（28 处）**没有一处测 `0x40 FOCUSED`**，测 `0x10 SELECTED` 的有 `0x004E5EDB`、`0x004D960A`。=> 焦点/选中位只能由对话框或 HD 包装置上，清掉最稳 |
-| 原来的状态来源 | `ButtonVisualState((flags & 0x20) != 0, b.pressed \|\| (flags & 1) != 0, b.hovered)`：既读原生禁用位，又把原生按下位（`& 1`）OR 进按下态——round-19 之后按下态已由本模块自己维护，这两个来源都是多余的“外部污染源” |
+| 原来的状态来源 | `ButtonVisualState((flags & 0x20) != 0, b.pressed \|\| (flags & 1) != 0, b.hovered)`：原生禁用位（该删）＋原生按下位 `& 1`（**不能删——实机可见的压住感正是它在兜底**）＋自有 `b.pressed`＋`b.hovered`（发亮态） |
 | 四态观感（第 18 轮素材） | 0=普通、1=按下（更暗、文字下移 1px）、2=悬停（更亮、文字发光）、3=禁用（发灰）；尺寸 打开/取出/放入 66×32、关闭 24×24、整理 36×22 |
 
 **改法**（三条要求一起落地）：
@@ -398,14 +398,29 @@
 - `WarehouseUiCallback.hpp`：新增 `kWhUiButtonFocusBits = 0x10 | 0x40`（SELECTED | FOCUSED），并把状态字位语义（含 `0x20` 是禁用、`SELECTED` 决定 `[item+0x40]` 帧、焦点虚函数是空 ret）写进注释；`ButtonVisualState` 保留 `disabled` 参数与优先级（仍是这套状态的唯一定义处，也是纯函数断言的对象）。
 - `WarehouseUiButtons.inc.cpp`：
   - 新增 `WarehouseUiClearButtonFocusBits_(b)`：把 `+0x16` 的 `0x10|0x40` 清掉。
-  - `WarehouseUiRefreshButton_`：**先清焦点位**，状态改为 `ButtonVisualState(false, b.pressed, b.hovered)`——只看自有按下/悬停（普通/按下/悬停三态），不再读原生禁用位与原生按下位。
+  - `WarehouseUiRefreshButton_`：**先清焦点位**，状态改为 `ButtonVisualStateForPress(b.pressed, (flags & 1) != 0)`——只有 普通/按下 两态（第一版公式写错、已按实机反馈修正，见下节“第二次修正”）。
   - **删除 `WarehouseUiSetButtonDisabled_`**（不再有任何禁用位写入；事务安全判定仍在动作分支里）。
   - 新增 `WarehouseUiResetButtonInput_()`：展开/收起这类整体显隐前，统一清掉五个按钮的 `pressed`/`hovered`/焦点位，避免残留表现为“像是有焦点”。
   - `WarehouseUiRestoreButtons_` 补 `b.pressed = false`（原来只清 `hovered`）。
 - `WarehouseUiStageB.inc.cpp`：删掉 `takeDisabled`/`putDisabled` 计算、两个 `EnableItem` 调用、两个 `WarehouseUiSetButtonDisabled_` 调用与随之无用的 `WarehouseUiBackpackHasMatch_`（放回判定仍用 `WarehouseUiBackpackFilter_`）；`WarehouseUiSetExpanded_` 入口调 `WarehouseUiResetButtonInput_()`。动作分支的 `WarehouseUiHeld_()`/`g_wh_locked_` 守卫原样保留——**去掉的是视觉禁用，不是安全判定**。
 - 消息策略不变：DOWN 仍只中和、动作仍只在 CLICK 子类型 `0xD` 执行一次。
 
-**验证**：`build.bat` + 审计 0 警告 0 错误、15 项 PASS、**UI flow 217 → 219**（新增 2 项：`kWhUiButtonFocusBits == 0x50`；从全 1 掩码清这两位后 `PRESSED/VISIBLE` 与其余位不受影响）、PCX 50/290；素材 python 回归 **15/15**；`deploy.bat` 退出码 0，Release 与 Packs SHA256 一致 `9DBBEE51AB7CE0433FC1A79C469C0EB878DA67038A52F94AB3FBBE70E47572CF`，whui 50 张在位。**实机待用户验收：①背包上的“仓库”按钮不再有焦点观感；②一键取出/放入点击时只有普通/按下/悬停三态，且不再出现“取放不可用”的灰态。**
+**验证（第一次修正）**：`build.bat` + 审计 0 警告 0 错误、15 项 PASS、**UI flow 217 → 219**（新增 2 项：`kWhUiButtonFocusBits == 0x50`；从全 1 掩码清这两位后 `PRESSED/VISIBLE` 与其余位不受影响）、PCX 50/290；素材 python 回归 **15/15**；`deploy.bat` 退出码 0，Release 与 Packs SHA256 一致 `9DBBEE51AB7CE0433FC1A79C469C0EB878DA67038A52F94AB3FBBE70E47572CF`，whui 50 张在位。
+
+**第二次修正（用户实机反馈：“不对,你这是搞成焦点效果还在,按下效果没有了 / 搞反了,我不需要焦点效果,需要鼠标按下时的压住效果和松开时的弹起效果(不带焦点效果)”）**：
+
+第一版错在哪（两处，都是我把“发亮态”与“按下态”混为一谈造成的）：
+
+1. **错删了原生按下位**：以为自有 `b.pressed` 已能承担按下态，就把 `flags & 1` 去掉了。实测：**实机可见的“压住感”正是原生按下位在兜底**（游戏在鼠标按下时自己置 `+0x16 & 1`，不依赖我们对手柄坐标/消息的判定），删掉后按下纹理再也不出现 ⇒ “按下效果没有了”。
+2. **把发亮态误当唯一元凶却留着**：五按钮的状态公式里我把 `b.hovered` 保留成了“悬停态”。可是**按住按钮时鼠标必然在按钮上**——只要按下位没置上，按下瞬间显示的正是那格**发亮的悬停纹理**（四态素材里 state2），也就是用户说的“焦点效果还在”。于是出现“焦点效果还在、按下效果没有了”这种看似矛盾、实则同一个根因的现象。
+
+修法（两处一起改）：
+
+- `WarehouseUiCallback.hpp`：新增纯函数 `ButtonVisualStateForPress(selfPressed, nativePressed) = (selfPressed || nativePressed) ? 1 : 0`——五按钮**只有 普通(0)/按下(1) 两态**；`ButtonVisualState`（四态通表）保留给离线断言与语义参考，但**按钮不再使用其中的悬停态(2)与禁用态(3)**。
+- `WarehouseUiButtons.inc.cpp`：`WarehouseUiRefreshButton_` 改读 `flags` 并调 `ButtonVisualStateForPress(b.pressed, (flags & 1) != 0)`；`WarehouseUiUpdateHover_` 的 `hovered` **不再决定底图**，只用来判“光标是否还压在这个按钮上”（按住后移出 = 弹起，原生同语义），且只有按下标记真变了才刷屏（普通悬停不再白刷一帧）。
+- 离线断言加 2 条：`ButtonVisualStateForPress` 真值表（00→0、10/01/11→1）＋“发亮的悬停态在四态通表里依然存在，只是按钮不用它”——把“悬停亮态与按下态是两回事、不能一起砍”这条教训钉在测试里。
+
+**验证（第二次修正）**：`build.bat` + 审计 0 警告 0 错误、15 项 PASS、**UI flow 219 → 221**、PCX 50/290。**部署待办**：验证时游戏正在运行（`Heroes3 HD.exe`，pid 50552），按既有纪律**绝不杀进程**，故本轮未部署——Packs 里仍是第一版 `9DBBEE51…`，新构建 `BF8098A7B84C77A51E5D7C6B1B464C5B9BE342BD163FA9655E9CE8457DF1A465` 待用户关闭游戏后 `deploy.bat`。**用户在实机看到的“焦点还在”正是第一版 DLL 的表现。**
 
 #### 第十九轮：五按钮“按下→弹起”一致化 + 原版关闭按钮资源考古（2026-10-14 17:5x 实机报告）
 

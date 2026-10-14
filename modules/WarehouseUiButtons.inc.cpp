@@ -232,11 +232,17 @@ static void WarehouseUiRefreshButton_(int index) noexcept {
     WarehouseButton_& b = g_wh_ui_buttons_[index];
     if (!WarehouseUiVisualOwns_(g_wh_ui_visual_dialog_, b.def)
         || !WarehouseUiVisualOwns_(g_wh_ui_visual_dialog_, b.visual)) return;
-    // round-20（用户裁定）：状态只看自有 pressed/hovered（普通/按下/悬停三态）。
-    // 不再读原生按下位（+0x16&1）与禁用位（+0x16&0x20）：一键取出/放入不做“能不能
-    // 取放”的判断，五按钮状态一致；同时清掉 SELECTED/FOCUSED，避免“看起来有焦点”。
+    const UINT16 flags = *reinterpret_cast<UINT16*>(reinterpret_cast<BYTE*>(b.def) + 0x16);
+    // round-20 第二次修正（用户裁定原话：“我不需要焦点效果,需要鼠标按下时的压住效果
+    // 和松开时的弹起效果(不带焦点效果)”）：五按钮只有 普通/按下 两态。
+    // * 不再用发亮的“悬停态”（四态素材里的 state2）：按住按钮时鼠标必然在按钮上，
+    //   按下位一旦没置上，显示的就是那一格——用户说的“焦点效果还在”正是它；
+    // * 按下位 = 自维护 pressed **或** 原生 PRESSED(+0x16 & 1) 任一为真。原生位是游戏
+    //   自己在鼠标按下时置上的，不依赖我们对坐标/消息的判定，是压住感的兜底来源
+    //   （第 19 轮实机可见的压住感就来自它，本不该删）。
     WarehouseUiClearButtonFocusBits_(b);
-    const int state = warehouseui::ButtonVisualState(false, b.pressed, b.hovered);
+    const int state = warehouseui::ButtonVisualStateForPress(b.pressed,
+        (flags & 1) != 0);
     b.visual->SetPcx(g_wh_ui_button_images_[index][state]);
 }
 // round-19（用户裁定）：五个按钮的“按下→弹起”必须一致可见。自己维护 pressed 后
@@ -350,8 +356,9 @@ static void WarehouseUiSetButtonVisible_(int index, bool visible) noexcept {
     b.hovered = false;
     b.pressed = false;
 }
-// 悬停统一走按钮循环（round-13 起整理也是按钮之一）：MOUSE_OVER 里改
-// b.hovered，由 RefreshButton_/Draw 决定四态底图，不再有单独的悬停逻辑。
+// 悬停跟踪（round-13 起整理也是按钮之一）：MOUSE_OVER 里改 b.hovered。round-20
+// 第二次修正后悬停**不再决定底图**（五按钮只有 普通/按下 两态），它只用来判“光标
+// 是否还压在这个按钮上”，按住后移出按钮即弹起；不再有单独的悬停外观逻辑。
 static void WarehouseUiUpdateHover_(H3BaseDlg* dlg, H3Msg* msg) noexcept {
     if (!dlg || !msg || dlg != g_wh_ui_visual_dialog_) return;
     for (int i = 0; i < kWhUiButtonCount_; ++i) {
@@ -365,11 +372,9 @@ static void WarehouseUiUpdateHover_(H3BaseDlg* dlg, H3Msg* msg) noexcept {
             && msg->GetY() >= y && msg->GetY() < y + height;
         if (hover == b.hovered) continue;
         b.hovered = hover;
-        // round-19：按住后把光标移出按钮 = 弹起（原生同语义），只清标记不额外刷屏，
-        // 后面的 RefreshButton_/Refresh 会一并把底图换回普通态。
-        if (!hover) b.pressed = false;
-        WarehouseUiRefreshButton_(i);
-        b.visual->Refresh();
+        // 按住后把光标移出按钮 = 弹起（原生同语义）。只有按下标记真变了才刷屏：
+        // 普通悬停变化不再触发任何重绘，也避免白刷一帧。
+        if (!hover) WarehouseUiSetButtonPressed_(i, false);
     }
 }
 static void WarehouseUiRestoreButtons_(H3BaseDlg* dlg) noexcept {

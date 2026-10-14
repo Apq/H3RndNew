@@ -1249,6 +1249,19 @@ void RunWarehouseUiFlowTests_() {
                   && (cleared & 0x01u) != 0 && (cleared & 0x04u) != 0,
               "clearing focus bits leaves PRESSED/VISIBLE and the rest intact");
     }
+    // round-20 第二次修正（用户原话：“我不需要焦点效果,需要鼠标按下时的压住效果和松开时
+    // 的弹起效果(不带焦点效果)”）：五按钮只有 普通(0)/按下(1) 两态。按下位取“自维护
+    // pressed”或“原生 PRESSED(+0x16&1)”任一为真——原生位是压住感的兜底来源，不能删。
+    Check(warehouseui::ButtonVisualStateForPress(false, false) == 0
+              && warehouseui::ButtonVisualStateForPress(true, false) == 1
+              && warehouseui::ButtonVisualStateForPress(false, true) == 1
+              && warehouseui::ButtonVisualStateForPress(true, true) == 1,
+          "press-only visual state: normal unless self or native pressed");
+    // 这一点必须钉死：round-20 第一次修正把悬停态当“焦点效果”删掉时，连带删了原生按下
+    // 位，结果变成“焦点效果还在、按下效果没有了”（用户实测反馈）。悬停亮态与按下态是
+    // 两回事，不能一起砍。
+    Check(warehouseui::ButtonVisualState(false, false, true) == 2,
+          "the bright hover texture still exists in the state table (unused by buttons)");
 
     if (g_failures != 0) {
         std::fprintf(stderr, "warehouse UI flow: %d/%d checks failed\n",
