@@ -303,7 +303,8 @@ void CheckRealAssets_()
         } else if (name.find("btn_") == 0) {
             width = 66; height = 32;
         } else if (name.find("tab") == 0) {
-            width = 44; height = 22;
+            // round-9：页签收窄到 36x22（两字标题），与页码/整理按钮同宽。
+            width = 36; height = 22;
         } else if (name.find("pager_") == 0) {
             width = 36; height = 22;
         } else if (name.find("tidy_") == 0) {

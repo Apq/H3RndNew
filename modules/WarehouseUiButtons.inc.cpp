@@ -8,7 +8,8 @@
 
 namespace {
 static constexpr int kWhUiBtnWidth_ = 66, kWhUiBtnHeight_ = 32;
-static constexpr int kWhUiTabWidth_ = 44, kWhUiTabHeight_ = 22;
+// round-9：页签 44→36（标题均为两字），高不变。
+static constexpr int kWhUiTabWidth_ = 36, kWhUiTabHeight_ = 22;
 static constexpr int kWhUiTabSlotCount_ = 4;
 static constexpr int kWhUiArrowWidth_ = 18, kWhUiArrowHeight_ = 22;
 static constexpr int kWhUiCloseWidth_ = 24, kWhUiCloseHeight_ = 24;
@@ -163,7 +164,8 @@ static void WarehouseUiCacheImages_(H3DlgPcx* source) noexcept {
     for (int t = 0; t < warehouseui::kTabCount; ++t) for (int s = 0; s < 2; ++s) {
         _snprintf_s(file, sizeof(file), _TRUNCATE, "tab%02d%c.pcx", t, s ? 's' : 'n');
         _snprintf_s(key, sizeof(key), _TRUNCATE, "wht%d%d", t, s);
-        g_wh_ui_tab_images_[t][s] = WarehouseUiLoadOne_(file, 44, 22, key);
+        g_wh_ui_tab_images_[t][s] = WarehouseUiLoadOne_(file, kWhUiTabWidth_,
+            kWhUiTabHeight_, key);
         all = all && g_wh_ui_tab_images_[t][s] != nullptr;
     }
     for (int a = 0; a < 2; ++a) for (int s = 0; s < 2; ++s) {
@@ -296,9 +298,10 @@ static void WarehouseUiResetTabs_() noexcept {
 static WarehouseTabPair_ WarehouseUiCreateTab_(int slot, int x, int y, int id) noexcept {
     WarehouseTabPair_ pair;
     if (!WarehouseUiImagesReady_() || slot < 0 || slot >= 4) return pair;
-    pair.label = WarehouseUiCreateVisual_(x, y, 44, 22, id,
+    // round-9（用户裁定）：页签标题都是两个字，44 收窄到 36（与页码/整理按钮同宽）。
+    pair.label = WarehouseUiCreateVisual_(x, y, kWhUiTabWidth_, kWhUiTabHeight_, id,
         g_wh_ui_tab_images_[0][0]);
-    pair.hit = H3DlgTransparentItem::Create(x, y, 44, 22, id);
+    pair.hit = H3DlgTransparentItem::Create(x, y, kWhUiTabWidth_, kWhUiTabHeight_, id);
     g_wh_ui_tabs_[slot] = pair;
     return pair;
 }

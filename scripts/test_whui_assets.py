@@ -15,7 +15,8 @@ TABS = ['常规', '卷轴', '装备', '头部', '肩部', '项链', '武器',
 EXPECTED = {
     **{f'btn_{button}{state}.pcx': ((24, 24) if button == 'close' else (66, 32))
        for button in ('open', 'close', 'take', 'put') for state in range(4)},
-    **{f'tab{tab:02d}{state}.pcx': (44, 22) for tab in range(12) for state in ('n', 's')},
+    # round-9：页签收窄到 36x22（两字标题），与页码/整理按钮同宽。
+    **{f'tab{tab:02d}{state}.pcx': (36, 22) for tab in range(12) for state in ('n', 's')},
     **{f'arrow_{direction}{state}.pcx': (18, 22)
        for direction in ('prev', 'next') for state in range(2)},
     'pager_n.pcx': (36, 22),
@@ -223,8 +224,7 @@ class WarehouseAssetsTest(unittest.TestCase):
         self.assertIn('name.find("tidy_") == 0', text)
         self.assertNotRegex(text, r'\b46\b')
         for dimensions in ('width = 24; height = 24;', 'width = 66; height = 32;',
-                           'width = 44; height = 22;', 'width = 18; height = 22;',
-                           'width = 36; height = 22;'):
+                           'width = 36; height = 22;', 'width = 18; height = 22;'):
             self.assertIn(dimensions, text)
 
 

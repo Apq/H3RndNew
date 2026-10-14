@@ -305,3 +305,13 @@
 
 ### 8.1 验证边界
 2026-10-14 08:2x（源码冻结）：`build.bat` + `H3RND_RUN_AUDIT_TESTS=1` + 游戏真实 `patcher_x86.dll`，两工程 0 警告 0 错误，13 项审计全 PASS（**UI flow 181**、PCX 48/282、codec 3025、core 1017、store 28、native 30、状态机/指纹 77、hooks、LoHook ABI、真实 patcher RNG 等）；`deploy.bat` 退出码 0，Release 与 Packs SHA256 均为 `B000A86221A946AAAB0CEE9ECBE837CA890B2CA2A3EE031E26BEDAA6B5E6AFEA`（182784 字节），whui 恰好 48 张，`H3RndNew.rc` 与 `H3RndNew.default.ini` 哈希前后一致。打开按钮的实际响应仍由用户实机验收。
+
+## 2026-10-14 第九轮：页签行改版（两端箭头 + 居中窄页签 + 滚轮）
+
+用户裁定三条，全部落地：
+1. **滚动箭头移到页签行左右两端**：左箭头 `面板左+8`、右箭头 `面板右-26`（与分页条同边距），不再用旧的 `+80/+311` 内缩位置；四个可见页签在两箭头之间居中（`CenteredTabsX(405,36,4,4)=124`）。
+2. **页签收窄**：标题均为两字，44→**36**（与页码/整理按钮同宽、间距 4、步距 40），24 张页签素材由生成器重出（尺寸/独立解码/两态差异/预览全部随动）。
+3. **页签行支持滚轮**：仓库展开且光标位于页签行（`面板左+8` 到 `面板右-8`、Y=`TabY..TabY+22`）时，滚轮滚动页签窗口。方向按 H3 消息层约定：`subtype` 承载 WM_MOUSEWHEEL 增量，**>0 上滚=窗口左移、<0 下滚=窗口右移**（`TabWheelShift`；H3Auto PanelInput 同源实证，原生 `OnMouseWheel(msg.subtype)` 同通道）。**只在实际滚动时消费**；行外、未展开、已到边界一律透传，不影响原生滚轮路径与其他区域。
+
+### 第九轮验证边界
+2026-10-14 08:4x（源码冻结 114 文件）：`build.bat` + `H3RND_RUN_AUDIT_TESTS=1` + 游戏真实 `patcher_x86.dll`，两工程 0 警告 0 错误，13 项审计全 PASS（**UI flow 183**（新增居中 X 与滚轮方向断言）、PCX 48/282）；素材独立回归 8/8（48 清单 + 页签 36x22）。`deploy.bat` 退出码 0，Release 与 Packs SHA256 均为 `7892AD7C93FAAA1BA042A1B5A04D52AA970ED6D049370F7D0DBB4C0764A1F5F0`（183296 字节），whui 48 张**逐张哈希对拍一致**（含 24 张新页签）。页签行两端箭头位置、36 宽观感、滚轮手感与“到边界透传”行为由用户实机验收；`H3RndNew.rc` 与 `H3RndNew.default.ini` 未提交、构建前后哈希一致。

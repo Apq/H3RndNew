@@ -43,6 +43,25 @@ inline constexpr bool PointInRect(int px, int py, const Rect& rect) noexcept {
     return rect.Contains(px, py);
 }
 
+// round-9：页签行 = 两端箭头 + 居中的 N 个页签。返回页签组在面板内的起始 X。
+// （405 宽面板、4 个 36 宽页签、间距 4 → 起始 124。）
+inline constexpr int CenteredTabsX(int panelWidth, int tabWidth, int slots,
+                                  int gap) noexcept {
+    if (tabWidth <= 0 || slots <= 0 || gap < 0) return 0;
+    const int total = slots * tabWidth + (slots - 1) * gap;
+    if (total >= panelWidth) return 0;
+    return (panelWidth - total) / 2;
+}
+
+// round-9：滚轮 → 页签窗口滚动方向。H3 消息层把 WM_MOUSEWHEEL 的增量放在
+// subtype（H3Auto PanelInput 已实证：>0 上滚、<0 下滚，量级无关）。
+// 上滚=窗口向左（更早的页签），下滚=窗口向右。
+inline constexpr int TabWheelShift(int wheelDelta) noexcept {
+    if (wheelDelta > 0) return -1;
+    if (wheelDelta < 0) return 1;
+    return 0;
+}
+
 inline constexpr bool Intersects(const Rect& left, const Rect& right) noexcept {
     return left.Overlaps(right);
 }

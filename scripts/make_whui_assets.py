@@ -35,7 +35,8 @@ OUT = os.path.join(ROOT, "whui")
 BTN_FRAME_KEY = (0, 255, 255)      # bv_frmL.pcx 透明青色
 BTN_W, BTN_H = 66, 32
 CLOSE_W, CLOSE_H = 24, 24
-TAB_W, TAB_H = 44, 22
+# round-9：页签标题均为两字，44 收窄到 36（与页码/整理按钮同宽）。
+TAB_W, TAB_H = 36, 22
 ARROW_W, ARROW_H = 18, 22
 PAGER_W, PAGER_H = 36, 22
 TIDY_W, TIDY_H = 36, 22

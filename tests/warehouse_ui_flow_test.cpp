@@ -648,6 +648,21 @@ void CheckRound8SlotBaseAndSorting() {
     const warehouse::Backpack once = storage;
     warehouseui::SortRecordsByIdentity(storage);
     Check(storage == once, "organize is idempotent");
+
+    // round-9：页签行 = 两端箭头 + 居中4个36宽页签（405宽面板 → 起始124）。
+    Check(warehouseui::CenteredTabsX(405, 36, 4, 4) == 124
+              && warehouseui::CenteredTabsX(405, 36, 1, 4) == 184
+              && warehouseui::CenteredTabsX(36, 36, 1, 0) == 0
+              && warehouseui::CenteredTabsX(30, 36, 1, 0) == 0
+              && warehouseui::CenteredTabsX(0, 36, 4, 4) == 0,
+          "centered tab row start X for the 405px panel and degenerate cases");
+    // round-9：滚轮方向（subtype 承载 WM_MOUSEWHEEL 增量，>0 上滚 <0 下滚）。
+    Check(warehouseui::TabWheelShift(120) == -1
+              && warehouseui::TabWheelShift(1) == -1
+              && warehouseui::TabWheelShift(-120) == 1
+              && warehouseui::TabWheelShift(-1) == 1
+              && warehouseui::TabWheelShift(0) == 0,
+          "wheel up shifts the tab window left, wheel down right, zero is a no-op");
 }
 
 void CheckDepositAllBatch() {
