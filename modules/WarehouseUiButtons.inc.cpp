@@ -1,6 +1,7 @@
 // H3MegaDesc式视觉层：原生DEF保留命中/按压，Draw槽改为绘制自有PCX。
 // 素材进程内缓存；dialog/item裸指针只在attach..detach所属窗口生命周期内使用。
 #include "WarehouseUiCatalog.hpp"
+#include "WarehouseUiCallback.hpp"
 #include "WarehouseUiFlow.hpp"
 #include "WarehouseUiPcx.hpp"
 #include <new>
@@ -34,6 +35,10 @@ struct WarehouseButton_ {
     void** originalVtable = nullptr;
     void* novtbl[15] = {};
     bool hovered = false;
+    // round-19：自有按下态。原实现只看原生按下位（item +0x16 & 1），实测只有整理
+    // 按钮能看到“按下→弹起”，一键/X/仓库看不到，故改由本模块在 DOWN 置位、
+    // CLICK/光标离开/隐藏时清位，并显式重绘（见 WarehouseUiSetButtonPressed_）。
+    bool pressed = false;
 };
 struct WarehouseTabPair_ {
     H3DlgPcx* label = nullptr;
@@ -217,8 +222,50 @@ static void WarehouseUiRefreshButton_(int index) noexcept {
     if (!WarehouseUiVisualOwns_(g_wh_ui_visual_dialog_, b.def)
         || !WarehouseUiVisualOwns_(g_wh_ui_visual_dialog_, b.visual)) return;
     const UINT16 flags = *reinterpret_cast<UINT16*>(reinterpret_cast<BYTE*>(b.def) + 0x16);
-    const int state = (flags & 0x20) ? 3 : (flags & 1) ? 1 : b.hovered ? 2 : 0;
+    // round-19：按下位 = 自有 pressed 或 原生 +0x16&1（两者任一为真）；禁用位仍最优先。
+    const int state = warehouseui::ButtonVisualState((flags & 0x20) != 0,
+        b.pressed || (flags & 1) != 0, b.hovered);
     b.visual->SetPcx(g_wh_ui_button_images_[index][state]);
+}
+// round-19（用户裁定）：五个按钮的“按下→弹起”必须一致可见。自己维护 pressed 后
+// 显式刷屏，序列与仓库状态条相同（Draw 走 vtable[4]，Refresh 经父对话框刷该 item
+// 矩形，对应原生 0x10FAA10 的效果）——不再依赖原生按下位是否触发重绘。
+static void WarehouseUiSetButtonPressed_(int index, bool pressed) noexcept {
+    if (index < 0 || index >= kWhUiButtonCount_) return;
+    WarehouseButton_& b = g_wh_ui_buttons_[index];
+    if (b.pressed == pressed) return;
+    b.pressed = pressed;
+    if (!WarehouseUiVisualOwns_(g_wh_ui_visual_dialog_, b.def)
+        || !WarehouseUiVisualOwns_(g_wh_ui_visual_dialog_, b.visual)) return;
+    WarehouseUiRefreshButton_(index);
+    __try {
+        b.visual->Draw();
+        b.visual->Refresh();
+    } __except (GuardCrashFilter_(GUARD_WH_UI_BUTTON_DRAW, GetExceptionInformation())) {}
+}
+// 按下置位：先按 itemId 命中；原生按下消息的 itemId 不保证是我们的按钮 ID（空槽/
+// 视觉件/命中回退都可能给别的值），此时退化为用光标点在该按钮矩形内定位（与
+// WarehouseUiUpdateHover_ 同一套判定）。两者都没命中 = 全部弹起。
+static void WarehouseUiSetButtonPressedByIdOrPoint_(H3BaseDlg* dlg, H3Msg* msg) noexcept {
+    int hit = msg ? warehouseui::ButtonIndexFromId(msg->itemId) : -1;
+    if (hit < 0 && msg) {
+        for (int i = 0; i < kWhUiButtonCount_; ++i) {
+            WarehouseButton_& b = g_wh_ui_buttons_[i];
+            if (!WarehouseUiVisualOwns_(dlg, b.def) || !b.def->IsVisible()
+                || !b.def->IsEnabled()) continue;
+            const int x = b.def->GetAbsoluteX(), y = b.def->GetAbsoluteY();
+            if (msg->GetX() >= x && msg->GetX() < x + WarehouseUiButtonWidth_(i)
+                && msg->GetY() >= y && msg->GetY() < y + WarehouseUiButtonHeight_(i)) {
+                hit = i;
+                break;
+            }
+        }
+    }
+    for (int i = 0; i < kWhUiButtonCount_; ++i)
+        WarehouseUiSetButtonPressed_(i, i == hit);
+}
+static void WarehouseUiClearAllButtonsPressed_() noexcept {
+    for (int i = 0; i < kWhUiButtonCount_; ++i) WarehouseUiSetButtonPressed_(i, false);
 }
 // 专门的视觉Draw替换：不画原来的iOkay图标，不改变其余14个vtable槽。
 static void __fastcall WarehouseUiButtonDraw_(void* self, void*) {
@@ -250,6 +297,7 @@ static WarehouseButtonPair_ WarehouseUiCreateButton_(int index, int x, int y, in
     b.visual = pair.visual;
     b.def = pair.def;
     b.hovered = false;
+    b.pressed = false;
     b.originalVtable = *reinterpret_cast<void***>(b.def);
     for (int i = 0; i < 15; ++i) b.novtbl[i] = b.originalVtable[i];
     b.novtbl[4] = reinterpret_cast<void*>(&WarehouseUiButtonDraw_);
@@ -282,6 +330,7 @@ static void WarehouseUiSetButtonVisible_(int index, bool visible) noexcept {
         }
     }
     b.hovered = false;
+    b.pressed = false;
 }
 // 悬停统一走按钮循环（round-13 起整理也是按钮之一）：MOUSE_OVER 里改
 // b.hovered，由 RefreshButton_/Draw 决定四态底图，不再有单独的悬停逻辑。
@@ -298,6 +347,9 @@ static void WarehouseUiUpdateHover_(H3BaseDlg* dlg, H3Msg* msg) noexcept {
             && msg->GetY() >= y && msg->GetY() < y + height;
         if (hover == b.hovered) continue;
         b.hovered = hover;
+        // round-19：按住后把光标移出按钮 = 弹起（原生同语义），只清标记不额外刷屏，
+        // 后面的 RefreshButton_/Refresh 会一并把底图换回普通态。
+        if (!hover) b.pressed = false;
         WarehouseUiRefreshButton_(i);
         b.visual->Refresh();
     }

@@ -716,6 +716,9 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
     if (!leftDown && !leftClick) return false;
     // DOWN只中和，不做事务；所有仓库动作只在 CLICK 运行一次。
     if (leftDown) {
+        // round-19（用户裁定）：DOWN 置位自有按下态，五个按钮（打开/关闭/取出/放入/
+        // 整理）一致的“按下”视觉；按在按钮以外（背包槽、空白、页码）等于全部弹起。
+        WarehouseUiSetButtonPressedByIdOrPoint_(dlg, msg);
         // round-8：展开态下背包侧左键按下全部由仓库接管（含 1000..1063 原生命中项）。
         // 透传会让原版按压/拖拽状态机与事务写回同时改同一份背包数组，且空格的
         // 按下最终会落到原生未知回退关闭分支；这里不再区分 ID 与控件归属。
@@ -723,6 +726,9 @@ static bool WarehouseUiHandle_(H3BaseDlg* dlg, H3Msg* msg) noexcept
             return true;
         return warehouseui::ConsumeWarehouseDown(id);
     }
+    // round-19：释放（CLICK）= 弹起。先把按钮复位成普通态再执行动作，五个按钮一致，
+    // 与整理按钮原有的“按下又弹起”观感相同。
+    WarehouseUiClearAllButtonsPressed_();
     // item状态机已在callback之前处理按下；只中和callback的未知ID关闭分支。
     // 按钮及页签动作只在释放CLICK执行一次。
     if (!g_wh_ui_live_.expanded && id != kWhUiOpenId_) return false;

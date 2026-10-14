@@ -1206,6 +1206,38 @@ void RunWarehouseUiFlowTests_() {
               && warehouseui::UsesGeometryFallback(-1),
           "geometry fallback yields to known warehouse control ids "
           "(the open button lives inside the backpack rect)");
+    // round-19（用户裁定）：五个按钮的“按下→弹起”一致可见——按下态改由本模块自己
+    // 维护，ID→数组下标的映射与四态优先级都必须与生产按钮模型逐项对齐。
+    Check(warehouseui::kWhUiOpenButtonId == 30200
+              && warehouseui::kWhUiCloseButtonId == 30060
+              && warehouseui::kWhUiTakeAllButtonId == 30201
+              && warehouseui::kWhUiPutAllButtonId == 30202
+              && warehouseui::kWhUiTidyButtonId == 30052,
+          "round-19 button ids match the deployed control ids");
+    Check(warehouseui::ButtonIndexFromId(30200) == 0
+              && warehouseui::ButtonIndexFromId(30060) == 1
+              && warehouseui::ButtonIndexFromId(30201) == 2
+              && warehouseui::ButtonIndexFromId(30202) == 3
+              && warehouseui::ButtonIndexFromId(30052) == 4
+              && warehouseui::ButtonIndexFromId(30005) == -1
+              && warehouseui::ButtonIndexFromId(1000) == -1
+              && warehouseui::ButtonIndexFromId(30400) == -1,
+          "button id maps onto 0=open 1=close 2=take 3=put 4=tidy only");
+    // 五个按钮 ID 必须都在“仓库控件集”里（否则 DOWN 不会被我们接管，按下态无从置位）。
+    Check(warehouseui::IsWarehouseControlId(30200)
+              && warehouseui::IsWarehouseControlId(30060)
+              && warehouseui::IsWarehouseControlId(30201)
+              && warehouseui::IsWarehouseControlId(30202)
+              && warehouseui::IsWarehouseControlId(30052),
+          "all five button ids are warehouse controls so DOWN reaches the press state");
+    // 四态优先级：禁用 > 按下 > 悬停 > 普通（按下态与原生位任一为真即 1）。
+    Check(warehouseui::ButtonVisualState(false, false, false) == 0
+              && warehouseui::ButtonVisualState(false, true, false) == 1
+              && warehouseui::ButtonVisualState(false, false, true) == 2
+              && warehouseui::ButtonVisualState(false, true, true) == 1
+              && warehouseui::ButtonVisualState(true, false, false) == 3
+              && warehouseui::ButtonVisualState(true, true, true) == 3,
+          "visual state order stays disabled > pressed > hover > normal");
 
     if (g_failures != 0) {
         std::fprintf(stderr, "warehouse UI flow: %d/%d checks failed\n",

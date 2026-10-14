@@ -379,6 +379,35 @@
 ### 第十四轮验证边界
 2026-10-14 12:1x（源码冻结 35 个 C++ 文件）：`build.bat` + 审计全绿（0 警告 0 错误、13 项 PASS、**UI flow 212**、PCX 50/290）；素材独立回归 11/11（同轮含第 13 轮的 `PagerRowBottomGap` 一致性断言）；`deploy.bat` 退出码 0，Release 与 Packs SHA256 一致，whui 50 张逐张对拍一致，ini 双侧一致。仓库状态条实际显示、悬停提示与背包逐字同款（含颜色）、离开保留文案、分页行配置边界的实机观感由用户验收。
 
+#### 第十九轮：五按钮“按下→弹起”一致化 + 原版关闭按钮资源考古（2026-10-14 17:5x 实机报告）
+
+用户两条要求：①“仓库界面上的两个一键按钮和X按钮，背包界面上的 仓库 按钮，点击时的视觉效果应该参考‘整理’按钮的做法”；②“仓库界面上的X按钮，我感觉应该要找一下原版资源中有没有表示关闭的X形按钮（如果没有，就用当前的）”。用户随后把①的差异定性为：“点击整理后，它有按下又弹起的感觉，但其它的没有这个感觉”。
+
+**① 按下感差异的取证**（逐项排除，全部落成离线断言）：
+
+| 假设 | 取证结果 |
+| --- | --- |
+| ID 不在接管范围（30052 与 30200/30060/30201/30202 不同类） | **否**。`ConsumeWarehouseDown(30052)` 与批量按钮同为 true，`IsWarehouseControlId` 覆盖全部五个 ID |
+| 素材缺按下态 / 文字位移 | **否**。`make_button`/`make_close`/`make_tidy` 走同一套 `state_texture` + `apply_reference_frame` + `STATE_TINT` + `stamp_text(dy=1 if pressed)`；实机日志 `50张四态/Tab/分页/整理素材 ready=1` 无回退 |
+| 按下帧生成了但没被重绘到屏幕 | **是（唯一差异）**。`WarehouseUiRefresh_` 每次都会 `WarehouseUiSetButtonVisible_(4, tidyVisible)`（`ShowActivate()` + `b.def->ShowActivate()` + `WarehouseUiRefreshButton_(4)`），即**只有整理按钮额外多吃一次重绘**；批量按钮只走 `WarehouseUiSetButtonDisabled_`（写 `flags |= 0x20` 后 `RefreshButton_`），X 与 仓库 两者都没有 |
+
+**修法**：不再赌原生按下位会触发重绘，改为**自己维护按下态**并显式刷屏（序列与已实机验证过的仓库状态条完全相同：`SetPcx` → `visual->Draw()`（vtable[4]）→ `visual->Refresh()`（经父对话框刷该 item 矩形，对应原生 `0x10FAA10` 效果））：
+
+- `WarehouseUiCallback.hpp`：新增五个按钮 ID 常量（`kWhUiOpenButtonId`/`kWhUiCloseButtonId`/`kWhUiTakeAllButtonId`/`kWhUiPutAllButtonId`/`kWhUiTidyButtonId`）、纯函数 `ButtonIndexFromId(id)`（30200→0、30060→1、30201→2、30202→3、30052→4、其余 -1）与 `ButtonVisualState(disabled, pressed, hovered)`（优先级 禁用 > 按下 > 悬停 > 普通）；`IsWarehouseControlId` 改为以 `ButtonIndexFromId(id) >= 0` 起判（行为等价，语义显式）。
+- `WarehouseUiButtons.inc.cpp`：`WarehouseButton_` 增 `bool pressed`；`WarehouseUiRefreshButton_` 的状态取值换成 `ButtonVisualState((flags & 0x20) != 0, b.pressed || (flags & 1) != 0, b.hovered)`（**保留原生 `& 1` 的 OR**，原生位若真被置上也不会退化）；新增 `WarehouseUiSetButtonPressed_`（值未变直接返回，避免无谓重绘；`__try` 内只有我们自己的 Draw/Refresh，原生调用在外且恰好一次）、`WarehouseUiSetButtonPressedByIdOrPoint_`（先按 `msg->itemId` 命中；原生按下消息的 itemId 不保证是按钮 ID，退化用光标点在该按钮矩形内定位，与 `WarehouseUiUpdateHover_` 同一套判定；两者都没命中＝全部弹起）、`WarehouseUiClearAllButtonsPressed_`。
+- `WarehouseUiStageB.inc.cpp`：`LBUTTON_DOWN` 分支先 `WarehouseUiSetButtonPressedByIdOrPoint_(dlg, msg)` 再走原有消费逻辑；`LBUTTON_CLICK` 分支在 expanded/动作分发之前 `WarehouseUiClearAllButtonsPressed_()`——**五个按钮因此都在释放时弹起，观感与整理一致**。
+- 弹起兜底：`WarehouseUiSetButtonVisible_` 末尾与 `WarehouseUiUpdateHover_` 的“离开悬停”分支都清 `pressed`，面板收起/隐藏/鼠标移出不会留下粘住的按下态。
+- 消息策略不变：DOWN 仍只中和、动作仍只在 CLICK 子类型 `0xD` 执行一次（原有断言原样保留）。
+
+**② 原版“X 形关闭按钮”考古**（只读游戏目录，脚本 `D:\logs\dsh\scripts\h3-warehouse-ui\find_close_x.py`、`decode_cancel.py`、`decode_common.py`）：
+
+- **LOD 名字扫描**：`Data\` 四个 LOD（H3ab_bmp 2491、H3ab_spr 569、H3bitmap 4919、H3sprite 5665 条目）按 `close|exit|cancel|quit|btnx|_x\.|^x\.|esc` 命中 16 条，关闭语义的只有 `iCANCEL.def`、`SOQUIT.DEF`、`QLexit.def`、`MuBexit.def`、`GSPEXIT.DEF`、`CSSexit.def`（+ 战役版 `CSSEXIT.DEE`）与 `BoSEscap.pcx`。
+- **0x47 DEF 变体定案**：这批 DEF 的 `type=0x47/0x43`，但结构与标准 8-bit DEF 完全一致——**调色板在 16..784（768 字节），块表在 784**（帧名如 `iCANCELn/s/d/h.pcx`），此前“块表紧跟 16 字节头”的旧解析会导致块名/帧表读飞。据此解码成功：`iCANCEL.def` **64×30 四态**（n/s/d/h，黄圈斜杠“⃠”图标 + 木纹金底）、`MuBexit.def` 64×32「退出」、`QLexit.def` 32×32「✓」、`SOQUIT.DEF` 100×48、`GSPEXIT.DEF` 166×40、`CSSexit.def` 120×105。
+- **HD mod 自带按钮全量**：`_HD3_Data\Common` 的 108 个 DEF 里可解码 46 个（`bckpck.def` 52×36 背包键、`hd_split`/`hd_xchng`/`hd_movl` 52×36 分兵/交换/移动、`icmNNNq.def` 44×36 英雄屏命令、`qcb.def` 64×32、`HWBUT2.def` 116×20、`Sw*/Mov1*` 战阵按钮…），**没有任何字面“X 形”的关闭按钮资源**。
+- **结论**：原版有“关闭/取消”语义的按钮——就是 H3 对话框标准的 `iCANCEL.def`（⃠ 圆圈斜杠，非字母 X），而且 **H3Auto 的取消键 `img/HA_cancel_*.pcx`（64×30）用的正是这张原版图**（逐像素同款）；但**没有字面 X 形按钮**。按用户“如果没有，就用当前的”裁定，保留当前字体 “X” 的关闭按钮（也是最小改动）：既没有可替换的 X 形原版资源，且当前关闭按钮是 **24×24** 而 `iCANCEL` 是 64×30 的宽椭圆，缩放会违反 round-18“只按所需尺寸正中直裁、不缩放”的既定纪律。
+
+**验证**：`build.bat` + 审计 0 警告 0 错误、15 项 PASS、**UI flow 213 → 217**（新增 4 项：五个按钮 ID 常量、`ButtonIndexFromId` 全表、五个 ID 均属仓库控件、`ButtonVisualState` 优先级真值表）、PCX 50/290；素材 python 回归 **15/15**；`deploy.bat` 退出码 0，Release 与 Packs SHA256 一致 `743477B4CE6EED7874E19E29E4A5B2986AA617AF6E4D10F42B1E2F94806C2438`，whui 50 张在位。**实机待用户验收：五个按钮点击时是否都有“按下→弹起”的同款手感。**
+
 #### 第十八轮：底纹改为“HA_bg 正中按需直裁”，彻底去掉平铺（2026-10-14 16:2x 实机报告）
 
 用户看完 round-17（bv_bg 木纹镜像平铺）后裁定：“现在这样也不行，这样吧，需要多少的底图，就去 `D:\GitHub\H3\H3Auto\img\HA_bg.pcx` 这个图中间截取所需大小，四态主要是底图+文字的明暗度变化，和位置变化”。

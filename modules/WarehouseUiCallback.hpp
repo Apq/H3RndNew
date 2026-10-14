@@ -15,12 +15,37 @@ inline constexpr IconView MakeIconView(int artifactId, int subtype, bool scrollD
 inline constexpr bool IsNativeBackpackGestureId(int id) noexcept {
     return (id >= 1000 && id < 1064) || (id >= 2000 && id < 2064);
 }
+// round-19（用户裁定）：一键取出/一键放入/关闭X/背包仓库这四个按钮的“按下→弹起”
+// 视觉必须与「整理」按钮一致。原实现完全依赖原生按下位（item +0x16 & 1）触发重绘，
+// 实测只有整理按钮看得到按下再弹起、其余四个看不到（用户原话：“点击整理后,它有按下
+// 又弹起的感觉,但其它的没有这个感觉”）。因此按下态改由本模块自己维护：
+// DOWN 置位、CLICK/光标离开按钮/隐藏时清位，四态统一走 ButtonVisualState。
+inline constexpr int kWhUiOpenButtonId = 30200;
+inline constexpr int kWhUiCloseButtonId = 30060;
+inline constexpr int kWhUiTakeAllButtonId = 30201;
+inline constexpr int kWhUiPutAllButtonId = 30202;
+inline constexpr int kWhUiTidyButtonId = 30052;
+// 按钮数组下标（与 WarehouseUiButtons.inc.cpp 的 g_wh_ui_buttons_ 逐项对应）：
+// 0=打开 1=关闭 2=取出 3=放入 4=整理；非按钮控件返回 -1。
+inline constexpr int ButtonIndexFromId(int id) noexcept {
+    return id == kWhUiOpenButtonId ? 0
+        : id == kWhUiCloseButtonId ? 1
+        : id == kWhUiTakeAllButtonId ? 2
+        : id == kWhUiPutAllButtonId ? 3
+        : id == kWhUiTidyButtonId ? 4 : -1;
+}
+// 四态优先级：禁用 > 按下 > 悬停 > 普通（与原实现同序，只改了按下位的来源）。
+inline constexpr int ButtonVisualState(bool disabled, bool pressed,
+                                      bool hovered) noexcept {
+    return disabled ? 3 : pressed ? 1 : hovered ? 2 : 0;
+}
 inline constexpr bool IsWarehouseControlId(int id) noexcept {
     // 30052 整理按钮（仅常规页签可见）；30060..30202 覆盖关闭/打开/一键取出/一键
     // 放入与 30100..30163 仓库槽；30300..30311 页签；30400..30411 分页页码按钮
     // （round-12：两端 30050/30051 箭头已删除；页码按两位数定宽、18px 边距内摆满，
     // 当前 10 个，区间留少量余量）。30000..30004 是背景/边框，不吞。
-    return id == 30052
+    // 五个按钮 ID 一律经 ButtonIndexFromId 判定，避免两处硬编码走偏。
+    return ButtonIndexFromId(id) >= 0
         || (id >= 30060 && id <= 30202) || (id >= 30300 && id <= 30311)
         || (id >= 30400 && id <= 30411);
 }
