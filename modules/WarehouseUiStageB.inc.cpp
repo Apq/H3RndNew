@@ -897,8 +897,9 @@ static void WarehouseUiAttach_(H3BaseDlg* dlg, H3Hero* hero,
     g_wh_ui_live_.flow = warehouseui::Flow(native, count, hero->id, hero->owner,
         g_warehouse_.mutationEpoch, token);
     // 每次弹窗打开时重读布局偏移配置（round-7：用户可随时改 user.ini 生效，
-    // 无需重启游戏）。
+    // 无需重启游戏）；页签显示顺序同轮读（round-11 TabOrder）。
     WarehouseUiLoadLayoutConfig_();
+    WarehouseUiLoadTabOrder_();
     WarehouseUiPrepareNativeIcons_(dlg);
     if (!g_wh_ui_live_.nativeIconsReady) {
         LogError("仓库UI: 无法建立完整原生背包图标，保留原生模式");

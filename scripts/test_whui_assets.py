@@ -10,6 +10,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / 'whui'
+# 出图按 TabKind 枚举规范序（固定），显示顺序由运行期 [WarehouseUI] TabOrder 决定。
 TABS = ['常规', '卷轴', '装备', '头部', '肩部', '项链', '武器',
         '盾牌', '胸甲', '戒指', '靴子', '杂物']
 EXPECTED = {

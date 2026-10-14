@@ -618,6 +618,59 @@ void CheckRound6CallbackAndIcons() {
           "round-7 pager geometry and backpack grid origin constants");
 }
 
+// round-11：页签顺序进配置（[WarehouseUI] TabOrder，默认 常规,卷轴,杂物→头部倒序,装备）。
+void CheckRound11TabOrderConfig() {
+    using warehouseui::kDefaultTabOrder;
+    using warehouseui::kDefaultTabOrderText;
+    using warehouseui::kTabCount;
+    using warehouseui::ParseTabOrder;
+    using warehouseui::TabKind;
+    using warehouseui::TabKindName;
+
+    Check(strcmp(TabKindName(TabKind::Misc), "杂物") == 0
+              && strcmp(TabKindName(TabKind::Equipment), "装备") == 0
+              && strcmp(TabKindName(TabKind::Regular), "常规") == 0,
+          "tab kinds carry their configured Chinese names");
+
+    TabKind parsed[kTabCount];
+    Check(ParseTabOrder(kDefaultTabOrderText, parsed),
+          "default tab order text parses");
+    bool orderMatch = true;
+    for (std::size_t i = 0; i < kTabCount; ++i)
+        orderMatch = orderMatch && parsed[i] == kDefaultTabOrder[i];
+    Check(orderMatch && parsed[0] == TabKind::Regular
+              && parsed[1] == TabKind::Scroll && parsed[2] == TabKind::Misc
+              && parsed[11] == TabKind::Equipment,
+          "default tab order is regular, scroll, reversed positions, "
+          "equipment last");
+
+    Check(ParseTabOrder(
+              "装备,常规,卷轴,杂物,靴子,戒指,胸甲,盾牌,武器,项链,肩部,头部",
+              parsed)
+              && parsed[0] == TabKind::Equipment && parsed[11] == TabKind::Head,
+          "custom permutation parses");
+    Check(!ParseTabOrder(
+              "常规,常规,卷轴,杂物,靴子,戒指,胸甲,盾牌,武器,项链,肩部,头部",
+              parsed)
+              && !ParseTabOrder(
+                  "常规,卷轴,杂物,靴子,戒指,胸甲,盾牌,武器,项链,肩部,头部",
+                  parsed)
+              && !ParseTabOrder(
+                  "常规,卷轴,杂物,靴子,戒指,胸甲,盾牌,武器,项链,肩部,头部,装备,杂物",
+                  parsed)
+              && !ParseTabOrder("", parsed)
+              && !ParseTabOrder(
+                  "常规,卷轴,杂物,靴子,戒指,胸甲,盾牌,武器,项链,肩部,头部,帽",
+                  parsed)
+              && !ParseTabOrder(nullptr, parsed),
+          "tab order rejects duplicates, missing, extra, unknown and empty");
+    Check(ParseTabOrder(
+              " 常规 , 卷轴 ,杂物,靴子,戒指,胸甲,盾牌,武器,项链,肩部,头部, 装备 ",
+              parsed)
+              && parsed[1] == TabKind::Scroll && parsed[11] == TabKind::Equipment,
+          "tab order tolerates whitespace around separators");
+}
+
 // round-8：原生宝物表 position 是 1-based（0 = 无装备位置），必须先归一化再分类；
 // 走查实机定案的分段编码：raw 1..6=头..胸甲(+1)、raw 7=戒指族(单值)、raw 8 起规范
 // 0-based（8=靴子、9..12=杂物1..4、18=杂物5）——第十轮用户实测戒指页=戒指+靴子、
@@ -897,6 +950,7 @@ void RunWarehouseUiFlowTests_() {
     CheckRound6CallbackAndIcons();
     CheckCatalogFilteringAndScrolling();
     CheckRound8SlotBaseAndSorting();
+    CheckRound11TabOrderConfig();
 
     // 置顶仓库层的点击过滤契约（纯函数，离线可回归）：
     using warehouseui::IsNativeBackpackId;

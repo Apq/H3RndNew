@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 namespace warehouseui {
 
@@ -37,10 +38,67 @@ enum class TabKind : std::uint8_t {
 // 机械与魔法书不会进入背包，也就不会进入仓库；自 2026-10-13 起不再列页签。
 inline constexpr std::size_t kTabCount = 12;
 
-inline constexpr TabKind kTabOrder[kTabCount] = {
-    TabKind::Regular, TabKind::Scroll, TabKind::Equipment, TabKind::Head,
-    TabKind::Shoulders, TabKind::Neck, TabKind::Weapon, TabKind::Shield,
-    TabKind::Torso, TabKind::Ring, TabKind::Feet, TabKind::Misc};
+// 页签显示顺序（round-11 用户裁定）：默认“常规、卷轴，杂物→头部倒序，装备”，
+// 运行期可用 [WarehouseUI] TabOrder=逗号分隔页签名（UTF-8 中文）覆盖，须为 12 个
+// 互不相同的合法页签名，否则回退本默认。素材 tab00..tab11 按 TabKind 枚举值出图
+// （固定规范序，见 make_whui_assets.py 的 TABS），与显示顺序解耦。
+inline constexpr TabKind kDefaultTabOrder[kTabCount] = {
+    TabKind::Regular, TabKind::Scroll, TabKind::Misc, TabKind::Feet,
+    TabKind::Ring, TabKind::Torso, TabKind::Shield, TabKind::Weapon,
+    TabKind::Neck, TabKind::Shoulders, TabKind::Head, TabKind::Equipment};
+inline constexpr const char* kDefaultTabOrderText =
+    "常规,卷轴,杂物,靴子,戒指,胸甲,盾牌,武器,项链,肩部,头部,装备";
+
+// 页签名（UTF-8）↔ TabKind：名字固定用于 ini 配置、日志与断言。
+inline const char* TabKindName(TabKind kind) noexcept {
+    switch (kind) {
+    case TabKind::Regular: return "常规";
+    case TabKind::Scroll: return "卷轴";
+    case TabKind::Equipment: return "装备";
+    case TabKind::Head: return "头部";
+    case TabKind::Shoulders: return "肩部";
+    case TabKind::Neck: return "项链";
+    case TabKind::Weapon: return "武器";
+    case TabKind::Shield: return "盾牌";
+    case TabKind::Torso: return "胸甲";
+    case TabKind::Ring: return "戒指";
+    case TabKind::Feet: return "靴子";
+    case TabKind::Misc: return "杂物";
+    default: return "未知";
+    }
+}
+
+// 解析逗号分隔的页签顺序文本。要求恰好 kTabCount 个互不相同且合法的页签名；
+// 未知名、重复、缺失、多余项都判无效返回 false（调用方回退默认），分隔符两侧
+// 容忍空白。
+inline bool ParseTabOrder(const char* text, TabKind* out) noexcept {
+    if (!text || !out) return false;
+    bool used[kTabCount] = {};
+    std::size_t count = 0;
+    const char* p = text;
+    while (*p != '\0') {
+        while (*p == ' ' || *p == '\t') ++p;
+        const char* start = p;
+        while (*p != '\0' && *p != ',') ++p;
+        const char* end = p;
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) --end;
+        int matched = -1;
+        const std::size_t len = static_cast<std::size_t>(end - start);
+        for (int k = 0; k < static_cast<int>(kTabCount); ++k) {
+            const char* name = TabKindName(static_cast<TabKind>(k));
+            if (strlen(name) == len && memcmp(name, start, len) == 0) {
+                matched = k;
+                break;
+            }
+        }
+        if (matched < 0 || used[matched]) return false;
+        used[matched] = true;
+        if (count >= kTabCount) return false;
+        out[count++] = static_cast<TabKind>(matched);
+        if (*p == ',') ++p;
+    }
+    return count == kTabCount;
+}
 
 // 与 WarehouseUiFlow.hpp / H3 原版一致的常量（避免跨头文件耦合，这里再声明一次）。
 inline constexpr int kTabScrollArtifactId = 1;   // eArtifacts::SPELL_SCROLL

@@ -60,6 +60,9 @@ static unsigned char g_wh_ui_palette_[sizeof(H3RGB888) * 256] = {};
 static bool g_wh_ui_images_attempted_ = false, g_wh_ui_images_ready_ = false;
 static std::size_t g_wh_ui_tab_offset_ = 0;
 static int g_wh_ui_tab_active_ = 0;
+// 页签显示顺序（round-11）：显示槽 i 对应 g_wh_ui_tab_order_[i]；attach 时经
+// [WarehouseUI] TabOrder 解析覆盖，非法回退 kDefaultTabOrder。
+static warehouseui::TabKind g_wh_ui_tab_order_[warehouseui::kTabCount];
 struct WarehouseVisualResource_ {
     H3DlgPcx* item = nullptr;
     H3LoadedPcx* original = nullptr;
@@ -297,7 +300,9 @@ static void WarehouseUiResetTabs_() noexcept {
     g_wh_ui_tidy_ = {};
     g_wh_ui_tidy_hovered_ = false;
     g_wh_ui_pager_window_begin_ = 0;
-    // native -2重建保留当前分类/偏移，不保留任何对象引用。
+    for (std::size_t i = 0; i < warehouseui::kTabCount; ++i)
+        g_wh_ui_tab_order_[i] = warehouseui::kDefaultTabOrder[i];
+    // native -2重建保留当前分类/偏移，不保留任何对象引用；顺序由下次 attach 重读。
 }
 static WarehouseTabPair_ WarehouseUiCreateTab_(int slot, int x, int y, int id) noexcept {
     WarehouseTabPair_ pair;
@@ -428,8 +433,14 @@ static void WarehouseUiRefreshTabs_(H3BaseDlg* dlg, bool redraw) noexcept {
     g_wh_ui_tab_offset_ = window.begin;
     for (int i = 0; i < kWhUiTabSlotCount_; ++i) {
         const std::size_t at = window.begin + i;
-        if (WarehouseUiVisualOwns_(dlg, g_wh_ui_tabs_[i].label) && at < warehouseui::kTabCount)
-            g_wh_ui_tabs_[i].label->SetPcx(g_wh_ui_tab_images_[at][at == g_wh_ui_tab_active_ ? 1 : 0]);
+        // round-11：显示槽 at 对应顺序数组里的 TabKind；素材固定按枚举规范序出图
+        // （tab{枚举值}.pcx），与显示顺序解耦，配置换序不用换素材。
+        if (WarehouseUiVisualOwns_(dlg, g_wh_ui_tabs_[i].label)
+            && at < warehouseui::kTabCount) {
+            const int asset = static_cast<int>(g_wh_ui_tab_order_[at]);
+            g_wh_ui_tabs_[i].label->SetPcx(g_wh_ui_tab_images_[asset]
+                [at == static_cast<std::size_t>(g_wh_ui_tab_active_) ? 1 : 0]);
+        }
     }
     for (int i = 0; i < 2; ++i) {
         const bool enabled = i ? window.canNext : window.canPrev;
@@ -456,7 +467,39 @@ static int WarehouseUiTabCommand_(int id) noexcept {
 }
 static int WarehouseUiActiveTab_() noexcept { return g_wh_ui_tab_active_; }
 static warehouseui::TabKind WarehouseUiActiveTabKind_() noexcept {
-    return warehouseui::kTabOrder[g_wh_ui_tab_active_];
+    return g_wh_ui_tab_order_[g_wh_ui_tab_active_];
+}
+// 页签显示顺序（round-11）：读 [WarehouseUI] TabOrder（逗号分隔中文页签名），
+// 两层 ini 叠加，默认 kDefaultTabOrderText。要求 12 个互不相同的合法页签名，
+// 任何缺失/重复/未知名都整体回退默认并留日志（原始读数 + 生效顺序都打出来）。
+static void WarehouseUiLoadTabOrder_() noexcept {
+    __try {
+        char text[192] = {};
+        IniReadUtf8Layered("WarehouseUI", "TabOrder",
+            warehouseui::kDefaultTabOrderText, text, (int)sizeof(text));
+        warehouseui::TabKind parsed[warehouseui::kTabCount];
+        if (warehouseui::ParseTabOrder(text, parsed)) {
+            for (std::size_t i = 0; i < warehouseui::kTabCount; ++i)
+                g_wh_ui_tab_order_[i] = parsed[i];
+        } else {
+            for (std::size_t i = 0; i < warehouseui::kTabCount; ++i)
+                g_wh_ui_tab_order_[i] = warehouseui::kDefaultTabOrder[i];
+            LogInfo("仓库UI: 页签顺序配置无效，回退默认 raw=%s", text);
+        }
+        char effective[192] = {};
+        int used = 0;
+        for (std::size_t i = 0; i < warehouseui::kTabCount && used >= 0
+            && (std::size_t)used + 1 < sizeof(effective); ++i)
+            used += _snprintf_s(effective + used,
+                (rsize_t)(sizeof(effective) - used), _TRUNCATE, "%s%s",
+                i ? "," : "",
+                warehouseui::TabKindName(g_wh_ui_tab_order_[i]));
+        LogInfo("仓库UI: 页签顺序 raw=%s 生效=%s", text, effective);
+    } __except (GuardCrashFilter_(GUARD_WH_UI_BUTTON_DRAW,
+        GetExceptionInformation())) {
+        for (std::size_t i = 0; i < warehouseui::kTabCount; ++i)
+            g_wh_ui_tab_order_[i] = warehouseui::kDefaultTabOrder[i];
+    }
 }
 static int WarehouseUiArtifactSlot_(int artifactId) noexcept {
     if (artifactId < 0 || artifactId > 143) return warehouseui::kSlotNone;
