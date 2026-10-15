@@ -540,3 +540,18 @@
 修复：**不再自行解析 H3.exe 侧的任何函数指针**，全改 H3API 官方路径——创建用 `H3ObjectAllocator<H3DlgTextPcx>().allocate(1)`（H3API 已证 `sizeof(H3DlgTextPcx)==0x54`，与原生 `new(0x54)` 完全一致，析构仍归 dialog owned-list）+ `THISCALL_12(0x5BCB70, …)` 按原生 11 个栈参数**逐参同构**（末位背包传 0；H3API 的 `Create` 内部固定传 8，故不直接用它）；悬停更新改用 `SetText`（→`vSetText`=原生 vtable[13]）→ `Draw`（→`vDrawToWindow`=vtable[4]）→ `Refresh`（经父对话框刷屏，对应原生 `0x10FAA10` 效果）。同时：①创建逻辑独立成 `WarehouseUiCreateStatusBar_`——MSVC 禁止在“需要对象展开”（含 std::vector 局部对象）的函数里用 `__try`（C2712），必须拆出去，失败只等于“没有状态条”；②install 期对每个解析出的指针做 `VirtualQuery` 归属自证并打日志（模块/偏移/页属性，期望代码页但不可执行或模块不符即告警），把这次的“肉眼读不出”的地址空间混淆变成日志里一眼可查。
 
 验证：`build.bat` + 审计全绿（0 警告 0 错误、13 项 PASS、UI flow 212、PCX 50/290）；`deploy.bat` 退出码 0，Release 与 Packs 哈希一致（`7980FF66A86279A120E923B4722FB13CBB12F92A735C64CD1F64412383B80B84`）；面板项实际约 130 个 < 容量 320（状态条随 `ShowActivate/HideDeactivate` 展开收起同步，不会重蹈 round-12“登记表上限”那种静默失败）。**实机待用户验收：打开仓库是否恢复、状态条是否显示、悬停提示是否与背包一致**。
+
+#### 第二十一轮：界面与功能分离（2026-10-15）
+
+用户指令（原话）：“参考 `D:\GitHub\H3\H3BattleStore` 做界面与功能的分离，便于以后换界面（包括之前的开局真随机复选框，宝屋最大化，滑块，百分比等所有有界面的地方）”；追问补齐范围：“仓库界面也要重构啊”。设计文档：`docs/界面与功能分离.md`（本文件记实施流水，契约/装配顺序/坑位以设计文档为准）。
+
+四个界面全部改经契约 `modules/UiPort.hpp` 驱动（`IScenarioUi` / `ISettingsUi` / `IWarehouseUi`，`UiPortWiring.inc.cpp` 静态接线）：
+
+1. **选图界面**：复选框+宝屋控件（id 常量、`Place*`/`Refresh*`/`Handle*`、手势接线、`s_*` 静态量）自 TrueRandom/BankMaximize **原样迁入** `HdScenarioUi.inc.cpp` 并封装为 `HdScenarioUi`；`OnScenarioCtor_/OnScenarioProc_` 只保留上下文观察（`ClassifyScenarioContext_`）与翻译（`DialogCreated/DialogMessage/DialogMessageDone`），铠甲结构原位不动。
+2. **设置窗**：控件树/下拉浮层/改键侦听/开窗时序迁入 `HdSettingsUi.inc.cpp`（`HdSettingsUi::KeyMsg` 即原 `OnKeyMsg_` 全部界面语义）；SettingsDialog.inc.cpp 收缩为共享助手（`Utf8ToGbk_`/`ScanToName_`）+ 持久化 + 键盘钩子翻译。
+3. **仓库界面**：StageB 按行切片 1-1269 为 `WarehouseUiPanel.inc.cpp`（面板主体 + `HdWarehouseUi`，Callback 含 SEH 铠甲与「原生 callback 恰好一次」原样迁入）；StageB 重写为纯钩子层（两只 modal LoHook、RVAs、`g_wh_ui_installed_`、指针自证、安装/回滚、三行 trampoline）。
+4. **测试**：flow 测试加 Null 三实现 + 3 项契约检查（221→224），证明契约无 H3API 也自足；生产接线指针经 `hook_abi_test.cpp` 对 H3RndNew.cpp 的整体包含被链接验证。
+
+坑：①`GUARD_WH_UI_MODAL` 在面板代码 `__except` 里被引用，注册必须留在 Panel 顶部（钩子文件复用、不二次注册，Guard id 槽位有限）；②契约参数类型必须 `h3::` 全限定，否则测试 TU 编不过；③拆文件脚本里 `[IO.File]::*` 用进程 CWD，必须绝对路径。
+
+验证：`build.bat` + 审计 0 警告 0 错误、15 项 PASS、**UI flow 224**、PCX 50/290；断直连 grep 审计（功能层零 UI 符号、钩子层只认 `g_uiXxx->`）；`deploy.bat` 后 Release 与 Packs 哈希一致。**本轮为纯代码搬移，实机行为必须逐像素不变，待用户上机回归四个界面（选图勾选/宝屋滑块、F11 设置窗、仓库面板全部交互）。**

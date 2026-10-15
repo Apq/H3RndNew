@@ -1,6 +1,9 @@
 // ========== 开局真随机 ==========
 // 只在单人场景点「开始」到建档返回这一段，替换取随机数的函数。
 // 地址依据：H3Note\开局真随机接入点逆向笔记.md。
+// round-21 界面与功能分离：本文件保留功能层（RNG 替换判定、窗口状态机、
+// 计数审计、持久化）与钩子层；选图对话框上的复选框/宝屋控件已迁至
+// HdScenarioUi.inc.cpp，钩子只经 g_uiScenario（modules/UiPort.hpp）驱动。
 
 static const UINT32 kScenarioDlgCtor_ = 0x579CE0; // thiscall(dlg, mode)
 static const UINT32 kScenarioDlgProc_ = 0x587FD0; // thiscall(dlg, msg)
@@ -8,27 +11,8 @@ static const UINT32 kStartGame_       = 0x58BFB0; // fastcall(this)，开始/装
 static const UINT32 kGameRand_        = 0x50C7C0; // fastcall(lo, hi)
 static const UINT32 kCrtRand_         = 0x61842C; // cdecl，随机图生成器直接调它
 
-// 宝屋最大化模块定义在本模块之后，复用场景/建档钩子的后置段。
-static void PlaceBankControls_(H3SelectScenarioDialog* dlg);
-static void RefreshBankControls_(H3SelectScenarioDialog* dlg);
-static bool HandleBankControls_(H3SelectScenarioDialog* dlg, H3Msg* msg);
-static void ResetBankDialog_();
+// 宝屋最大化模块定义在本模块之后，复用建档钩子的后置段。
 static void FinishBankMaximize_(bool newGame, unsigned result, int enabled, int ratio);
-
-// id 130 是右上区域下方的「随机图」按钮 (414,105) 200x20，仅作参照。
-// 「显示可选场景」在它正上方一行，id 128 同行 (414,81)。
-
-// 文字区：显示在 id=131 的空白 hitbox 上方，最终单独重画以保证层级。
-static const int kLabelGap_ = 6;
-static const int kLabelW_    = 90;
-static const int kCheckId_    = 0x7D01;
-static const int kLabelId_    = 0x7D02;
-static const int kLabelHitId_ = 0x7D03;
-static const int kCheckW_     = 32;
-static const int kCheckH_     = 24;
-
-// 游戏界面按 GBK 画字。源码是 UTF-8，这里存转好的字节。
-static const char kCheckHint_[] = "\xBF\xAA\xBE\xD6\xD5\xE6\xCB\xE6\xBB\xFA";
 
 // 只在点开始到建档返回之间为 1。战斗、菜单、走动中的取数看到的是 0。
 static volatile LONG g_in_new_game_ = 0;
@@ -161,155 +145,6 @@ static int NextTrue15_()
     return static_cast<int>(value & 0x7FFFu);
 }
 
-// HD「其它选项」用 ChkBlue.def 的静态图，帧 0 空、帧 1 勾。
-static void ApplyCheckFrame_(H3DlgDef* box)
-{
-    if (!box) return;
-    box->SetFrame(g_true_random ? 1 : 0);
-    box->Draw();
-    box->ParentRedraw();
-}
-
-static bool PointInside_(H3DlgItem* item, int x, int y)
-{
-    if (!item) return false;
-    return x >= item->GetAbsoluteX()
-        && x < item->GetAbsoluteX() + item->GetWidth()
-        && y >= item->GetAbsoluteY()
-        && y < item->GetAbsoluteY() + item->GetHeight();
-}
-
-// Debug 只保留布局锚点、模式按钮和自有控件；Trace 才展开完整清单。
-// 两个阶段仍可对照 HD 重排；提示按 GBK 十六进制记录。
-static void LogInventory_(H3SelectScenarioDialog* dlg, const char* phase)
-{
-    if (!dlg || g_disable_log || g_log_level > LOG_DEBUG) return;
-    H3DlgItem** const items = dlg->GetList().begin();
-    const int count = static_cast<int>(dlg->GetList().Count());
-    const bool complete = g_log_level == LOG_TRACE;
-    LogDebug("真随机: [%s] 控件共 %d 项，输出=%s", phase, count,
-        complete ? "完整(trace)" : "关键(debug)");
-    for (int i = 0; i < count; ++i) {
-        H3DlgItem* item = items[i];
-        if (!item) continue;
-        const int id = item->GetID();
-        const bool key = (id >= 128 && id <= 131) || id == 186 || id == 335
-            || id == kCheckId_ || id == kLabelId_ || id == kLabelHitId_;
-        if (!complete && !key) continue;
-        const UINT32 vt = *reinterpret_cast<UINT32*>(item);
-        const char* asset = "?";
-        if (vt == H3DlgDef::VTABLE && item->Cast<H3DlgDef>()->GetDef())
-            asset = item->Cast<H3DlgDef>()->GetDef()->GetName();
-        else if (vt == H3DlgDefButton::VTABLE && item->Cast<H3DlgDefButton>()->GetDef())
-            asset = item->Cast<H3DlgDefButton>()->GetDef()->GetName();
-        char hintHex[64] = "(无)";
-        const UINT32 hintPtr = *reinterpret_cast<UINT32*>(
-            reinterpret_cast<BYTE*>(item) + 0x20); // H3DlgItem::hint
-        if (hintPtr) {
-            hintHex[0] = '\0';
-            const BYTE* hint = reinterpret_cast<const BYTE*>(hintPtr);
-            for (int j = 0; j < 16 && hint[j]; ++j)
-                _snprintf(hintHex + j * 3, sizeof(hintHex) - j * 3,
-                    "%02X ", hint[j]);
-        }
-        auto log = complete ? &LogTrace : &LogDebug;
-        log("真随机: [%s] id=%d (%d,%d) %dx%d vt=0x%08X %s 提示=%s",
-            phase, item->GetID(), item->GetX(), item->GetY(),
-            item->GetWidth(), item->GetHeight(), vt, asset, hintHex);
-    }
-}
-
-
-// 已经记过清单的对话框。指针变了就是新开的一次选图界面。
-static H3SelectScenarioDialog* s_seen_dlg_ = nullptr;
-// H3DlgText::Draw 只改绘图缓冲，不保证当前窗口立即刷新；保存指针，
-// 在该对话框每次消息处理结束后再画一次并 Refresh，避免后续重绘抹掉文字。
-static H3DlgText* s_label_ = nullptr;
-
-static void RefreshTrueRandomLabel_(H3SelectScenarioDialog* dlg)
-{
-    if (!dlg || !s_label_) return;
-    bool owned = false;
-    for (H3DlgItem* item : dlg->GetList()) if (item == s_label_) { owned = true; break; }
-    if (!owned) { s_label_ = nullptr; return; }
-    if (s_label_->GetID() != kLabelId_) return;
-    s_label_->ShowActivate();
-    // Draw 写入当前画布，Refresh 再把文字区域刷到窗口；顺序不能反。
-    s_label_->Draw();
-    s_label_->Refresh();
-}
-
-// 对话框收到第一条消息时才放：构造后 HD 还会重排，那时读到的
-// 控件位置才是最终位置。id 128 与「显示可选场景」按钮同行，
-// 在 (414,81) 200x20；勾选框放在它右边界外 4 像素、行内居中。
-static const int kShowMapsRowId_ = 128;
-
-static void PlaceTrueRandomCheckbox_(H3SelectScenarioDialog* dlg,
-    const char* phase)
-{
-    if (!dlg || dlg->isCampaignMaybe || dlg->isLoadingMaybe) return;
-    if (dlg->GetH3DlgItem(static_cast<UINT16>(kCheckId_))) return;
-    H3DlgItem* row = dlg->GetH3DlgItem(static_cast<UINT16>(kShowMapsRowId_));
-    if (!row) {
-        LogError("真随机: [%s] 找不到显示可选场景所在行控件", phase);
-        return;
-    }
-    const int x = row->GetX() + row->GetWidth() + 4;
-    const int y = row->GetY() + (row->GetHeight() - kCheckH_) / 2;
-    const int text_height = FontTextHeight_(kCheckH_, SmallFontHeight_());
-    const int text_y = row->GetY() + (row->GetHeight() - text_height) / 2;
-    H3DlgItem* next_row = dlg->GetH3DlgItem(130);
-    const int bottom = next_row ? next_row->GetY() : row->GetY() + row->GetHeight() + 4;
-    if (text_y < 0 || text_y + text_height > bottom
-        || x + kCheckW_ + kLabelGap_ + kLabelW_ > dlg->GetWidth()) {
-        LogWarn("真随机: 小字体行高 %d 超出选图标签可用布局，未添加勾选控件", SmallFontHeight_());
-        return;
-    }
-    // 与 HD「其它选项」相同：ChkBlue.def 静态图，点击在 0x0C 消息里翻转。
-    H3DlgDef* box = H3DlgDef::Create(x, y, kCheckW_, kCheckH_,
-        kCheckId_, "ChkBlue.def",
-        g_true_random ? 1 : 0, 0, FALSE, FALSE);
-    if (!box) {
-        LogError("真随机: 创建勾选框失败");
-        return;
-    }
-    box->SetHint(kCheckHint_);
-    dlg->AddItem(box);
-    box->Draw();
-    // 透明点击区先加（更高层），文字在上面绘制，避免被点击区遮挡。
-    H3DlgTransparentItem* hit = H3DlgTransparentItem::Create(
-        x + kCheckW_ + kLabelGap_, text_y, kLabelW_, text_height, kLabelHitId_);
-    if (!hit) {
-        LogError("真随机: 创建文字点击区失败");
-        return;
-    }
-    hit->SetHint(kCheckHint_);
-    dlg->AddItem(hit);
-
-    H3DlgText* label = H3DlgText::Create(x + kCheckW_ + kLabelGap_, text_y,
-        kLabelW_, text_height, kCheckHint_, "smalfont.fnt",
-        1, kLabelId_, 4, 0);
-    if (!label) {
-        LogError("真随机: 创建文字失败");
-        return;
-    }
-    label->SetHint(kCheckHint_);
-    dlg->AddItem(label);
-    s_label_ = label;
-    // AddItem 会加载控件，但原生对话框后续重绘可能覆盖它；最后单独绘制文字。
-    dlg->Redraw();
-    RefreshTrueRandomLabel_(dlg);
-    box->ParentRedraw();
-    RefreshTrueRandomLabel_(dlg);
-    // 一次开框只留一条汇总；细节排查用 [Logging] MinLevel=debug 配合清单。
-    LogInfo("真随机: [%s] 已加复选框 TrueRandom=%d（显示行 (%d,%d) %dx%d，"
-        "勾选框 (%d,%d)，文字 visible=%d active=%d）",
-        phase, g_true_random, row->GetX(), row->GetY(),
-        row->GetWidth(), row->GetHeight(), x, y,
-        label->IsVisible(), label->IsActive());
-}
-
-
 // 本模块的钩子 id（静态初始化期注册；文件在 CrashGuard.hpp 之后包含）。
 static const int GUARD_SCENARIO_CTOR = GuardRegisterHook_("ScenarioDlgCtor");
 static const int GUARD_SCENARIO_PROC = GuardRegisterHook_("ScenarioDlgProc");
@@ -337,44 +172,14 @@ static int __stdcall OnScenarioProc_(HiHook* hook,
                     msg ? msg->command : -1, msg ? msg->subtype : -1,
                     msg ? msg->itemId : -1, ScenarioContextName_(context));
         }
-        if (HandleBankControls_(dlg, msg)) return 1;
-        if (msg && dlg
-            && msg->command == eMsgCommand::ITEM_COMMAND
-            && msg->subtype == eMsgSubtype::LBUTTON_DOWN)
-        {
-            H3DlgItem* clicked = dlg->GetH3DlgItem(
-                static_cast<UINT16>(msg->itemId));
-            const bool ours = clicked
-                && (clicked->GetID() == kCheckId_
-                    || clicked->GetID() == kLabelHitId_);
-            const bool over_check = PointInside_(dlg->GetH3DlgItem(
-                static_cast<UINT16>(kCheckId_)), msg->GetX(), msg->GetY());
-            const bool over_label = PointInside_(dlg->GetH3DlgItem(
-                static_cast<UINT16>(kLabelHitId_)), msg->GetX(), msg->GetY());
-            if (ours || over_check || over_label) {
-                g_true_random = g_true_random ? 0 : 1;
-                PersistTrueRandom_();
-                ApplyCheckFrame_(dlg->GetDef(static_cast<UINT16>(kCheckId_)));
-                LogInfo("真随机: 勾选改为 %d，消息 id=%d",
-                    g_true_random, msg->itemId);
-                return 1;
-            }
-        }
+        if (g_uiScenario->DialogMessage(dlg, msg)) return 1;
     } __except (GuardCrashFilter_(GUARD_SCENARIO_PROC, GetExceptionInformation())) {}
 
     const int result = THISCALL_2(int, hook->GetDefaultFunc(), dlg, msg);
 
     __try {
-        if (result == 2) { ResetBankDialog_(); s_label_ = nullptr; return result; }
-        RefreshTrueRandomLabel_(dlg);
-        // 原函数处理完这条消息后再动控件列表，避免在它的遍历中途插入。
-        if (dlg && dlg != s_seen_dlg_) {
-            s_seen_dlg_ = dlg;
-            LogInventory_(dlg, "首消息");
-            PlaceTrueRandomCheckbox_(dlg, "首消息");
-            PlaceBankControls_(dlg);
-        }
-        RefreshBankControls_(dlg);
+        // 界面层自理：关窗清理（result==2）、首消息摆控件、可见性刷新。
+        g_uiScenario->DialogMessageDone(dlg, result);
     } __except (GuardCrashFilter_(GUARD_SCENARIO_PROC, GetExceptionInformation())) {}
     return result;
 }
@@ -386,9 +191,8 @@ static H3SelectScenarioDialog* __stdcall OnScenarioCtor_(HiHook* hook,
     H3SelectScenarioDialog* const result = THISCALL_2(H3SelectScenarioDialog*,
         hook->GetDefaultFunc(), dlg, mode);
     __try {
-        s_seen_dlg_ = nullptr;
-        s_label_ = nullptr;
-        ResetBankDialog_();
+        // 界面层自理：清选图控件残留 + 构造期清单日志。
+        g_uiScenario->DialogCreated(dlg, mode);
         const ScenarioContext_ context = dlg ? ClassifyScenarioContext_(
             dlg->isCampaignMaybe != 0, dlg->isLoadingMaybe != 0) : kScenarioUnknown_;
         ObserveScenarioContext_(context);
@@ -396,8 +200,6 @@ static H3SelectScenarioDialog* __stdcall OnScenarioCtor_(HiHook* hook,
             reinterpret_cast<UINT32>(dlg), mode,
             dlg ? dlg->isCampaignMaybe : -1, dlg ? dlg->isLoadingMaybe : -1,
             dlg ? dlg->_f_66 : -1, ScenarioContextName_(context));
-        // 构造刚完，HD 的重排还没跑，这里只留一份清单做对照。
-        if (mode == 0) LogInventory_(dlg, "构造");
     } __except (GuardCrashFilter_(GUARD_SCENARIO_CTOR, GetExceptionInformation())) {}
     return result;
 }

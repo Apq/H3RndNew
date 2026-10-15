@@ -24,6 +24,10 @@ PatcherInstance* _PI = nullptr;
 #include "modules/CrashGuard.hpp"
 #include "modules/RandomAudit.inc.cpp"
 #include "modules/TextLayout.hpp"
+// 界面契约（round-21 界面与功能分离，docs/界面与功能分离.md）：钩子层只经
+// g_uiScenario / g_uiSettings / g_uiWarehouse 驱动界面；实现与接线见
+// HdScenarioUi / HdSettingsUi / WarehouseUiPanel 与 UiPortWiring。
+#include "modules/UiPort.hpp"
 
 static int SmallFontHeight_()
 {
@@ -34,10 +38,14 @@ static int SmallFontHeight_()
 
 #include "modules/TrueRandom.inc.cpp"
 #include "modules/BankMaximize.inc.cpp"
+#include "modules/HdScenarioUi.inc.cpp"
 #include "modules/SettingsDialog.inc.cpp"
+#include "modules/HdSettingsUi.inc.cpp"
 #include "modules/WarehouseStore.inc.cpp"
 #include "modules/WarehouseUiStageA.inc.cpp"
 #include "modules/WarehouseUiFlow.hpp"
 #include "modules/WarehouseUiButtons.inc.cpp"
+#include "modules/WarehouseUiPanel.inc.cpp"
 #include "modules/WarehouseUiStageB.inc.cpp"
+#include "modules/UiPortWiring.inc.cpp"
 #include "modules/Entry.inc.cpp"

@@ -1,19 +1,10 @@
 // Reward-only postprocessing. Included after the existing RNG/UI helpers.
+// round-21 界面与功能分离：宝屋控件（复选框/滑块/百分比）与命中手势接线
+// 已迁至 HdScenarioUi.inc.cpp；本文件保留功能层——奖励后处理、拒绝采样、
+// 模型持久化（PersistBankSetting_ 写 g_bank_maximize / g_bank_ratio）。
 #include "BankMaximizeCore.hpp"
 
-static const int kBankCheckId_ = 0x7D10;
-static const int kBankLabelId_ = 0x7D11;
-static const int kBankHitId_ = 0x7D12;
-static const int kBankSliderId_ = 0x7D13;
-static const int kBankPercentId_ = 0x7D14;
-static const int kBankPercentBgId_ = 0x7D15;
-static H3SelectScenarioDialog* s_bank_drag_dlg_ = nullptr;
-static bankmax::SliderGesture s_bank_gesture_;
-static bool s_bank_controls_ready_ = false;
-static void ResetBankDrag_() { s_bank_drag_dlg_ = nullptr; s_bank_gesture_.Reset(); }
-static void ResetBankDialog_() { ResetBankDrag_(); s_bank_controls_ready_ = false; }
 static const int GUARD_BANK_REWARDS = GuardRegisterHook_("BankMaxRewards");
-static const char kBankLabel_[] = "\xB1\xA6\xCE\xDD\xD7\xEE\xB4\xF3\xBB\xAF";
 
 static_assert(offsetof(H3MapItem, objectType) == 0x1E, "SoD map object type");
 static_assert(offsetof(H3MapItem, objectSubtype) == 0x22, "SoD map object subtype");
@@ -23,162 +14,11 @@ static_assert(offsetof(H3CreatureBankState, artifactTypeCounts) == 0x5B, "Artifa
 static_assert(offsetof(H3Main, randomArtifacts) == 0x4E224, "Artifact working pool");
 static_assert(offsetof(H3Main, artifactsAllowed) == 0x4E2B4, "Map artifact bans");
 
-static bool BankOwnsItem_(H3BaseDlg* dlg, H3DlgItem* item) {
-    if (!dlg || !item) return false;
-    for (H3DlgItem* owned : dlg->GetList()) if (owned == item) return true;
-    return false;
-}
 static void PersistBankSetting_(const char* key, int value) {
     char text[16];
     _snprintf(text, sizeof(text), "%d", value);
     if (!IniWriteKeyUtf8(g_user_ini_path, "BankMaximize", key, text))
         LogError("宝屋最大化: 保存 %s 失败", key);
-}
-static void RefreshBankControls_(H3SelectScenarioDialog* dlg) {
-    if (!dlg || !s_bank_controls_ready_) return;
-    const bool visible = !dlg->isCampaignMaybe && !dlg->isLoadingMaybe;
-    for (int id : {kBankCheckId_, kBankLabelId_, kBankHitId_, kBankSliderId_, kBankPercentBgId_, kBankPercentId_}) {
-        H3DlgItem* item = dlg->GetH3DlgItem(static_cast<UINT16>(id));
-        if (!BankOwnsItem_(dlg, item)) continue;
-        if (!visible) { item->HideDeactivate(); continue; }
-        item->ShowActivate();
-        if (id == kBankCheckId_) static_cast<H3DlgDef*>(item)->SetFrame(g_bank_maximize ? 1 : 0);
-        if (id == kBankPercentId_) {
-            char text[16];
-            _snprintf(text, sizeof(text), "%d.%d%%", g_bank_ratio / 10, g_bank_ratio % 10);
-            static_cast<H3DlgText*>(item)->SetText(text);
-        }
-        if (id == kBankSliderId_) {
-            H3LoadedPcx16* pcx = static_cast<H3DlgPcx16*>(item)->GetPcx();
-            if (pcx) {
-                const int width = item->GetWidth();
-                const int knob = (width - 8) * g_bank_ratio / 1000;
-                pcx->FillRectangle(0, 0, width, 16, 45, 40, 35);
-                pcx->FillRectangle(4, 7, width - 8, 2, 110, 100, 70);
-                pcx->FillRectangle(4, 7, knob, 2, 235, 205, 116);
-                pcx->FillRectangle(knob, 2, 8, 12, 160, 125, 55);
-                pcx->DrawFrame(knob, 2, 8, 12, 235, 205, 116);
-            }
-        }
-        // Compose the complete image before presenting any rectangle. In
-        // particular, never present the blank percentage background alone.
-        if (id != kBankHitId_) item->Draw();
-    }
-    for (int id : {kBankCheckId_, kBankLabelId_, kBankSliderId_, kBankPercentId_}) {
-        H3DlgItem* item = dlg->GetH3DlgItem(static_cast<UINT16>(id));
-        if (visible && BankOwnsItem_(dlg, item)) item->Refresh();
-    }
-}
-static H3DlgPcx16* CreateBankSlider_(int x, int y, int width) {
-    H3LoadedPcx16* pcx = H3LoadedPcx16::Create("", width, 16);
-    if (!pcx) return nullptr;
-    H3DlgPcx16* item = H3DlgPcx16::Create(x, y, width, 16, kBankSliderId_, nullptr);
-    if (!item) { pcx->Destroy(); return nullptr; }
-    item->SetPcx(pcx);
-    return item;
-}
-static H3DlgPcx16* CreateBankPercentBackground_(H3SelectScenarioDialog* dlg, int x, int y, int height) {
-    H3LoadedPcx16* pcx = H3LoadedPcx16::Create("", 47, height);
-    if (!pcx) return nullptr;
-    H3WindowManager* wm = H3WindowManager::Get();
-    H3LoadedPcx16* source = wm ? wm->GetDrawBuffer() : nullptr;
-    const int absX = dlg->GetX() + x, absY = dlg->GetY() + y;
-    if (source && absX >= 0 && absY >= 0 && absX + 47 <= source->width
-        && absY + height <= source->height) pcx->CopyRegion(source, absX, absY);
-    else pcx->FillRectangle(0, 0, 47, height, 45, 40, 35);
-    H3DlgPcx16* item = H3DlgPcx16::Create(x, y, 47, height, kBankPercentBgId_, nullptr);
-    if (!item) { pcx->Destroy(); return nullptr; }
-    item->SetPcx(pcx);
-    return item;
-}
-static void SetBankRatioFromMouse_(H3SelectScenarioDialog* dlg, H3DlgItem* slider, int mouseX) {
-    if (!BankOwnsItem_(dlg, slider)) return;
-    int ratio = bankmax::RatioFromPixel(mouseX - slider->GetAbsoluteX(), slider->GetWidth());
-    if (ratio == g_bank_ratio) return;
-    g_bank_ratio = ratio;
-    PersistBankSetting_("Ratio", ratio);
-    RefreshBankControls_(dlg);
-}
-static void PlaceBankControls_(H3SelectScenarioDialog* dlg) {
-    if (!dlg || dlg->isCampaignMaybe || dlg->isLoadingMaybe
-        || dlg->GetH3DlgItem(kBankCheckId_)) return;
-    // id=100 is repeated. Locate the victory title by its native rectangle,
-    // after HD's first-message rearrangement; do not take the first id=100.
-    H3DlgItem* title = nullptr;
-    for (H3DlgItem* item : dlg->GetList()) {
-        if (item && item->GetID() == 100 && item->GetX() >= 410
-            && item->GetY() >= 280 && item->GetY() <= 300
-            && item->GetWidth() >= 200 && item->GetHeight() <= 30) {
-            title = item; break;
-        }
-    }
-    if (!title) { LogWarn("宝屋最大化: 未找到胜利条件标题，未添加控件"); return; }
-    const bankmax::ControlsLayout layout(title->GetX());
-    const int x = layout.checkX;
-    const int y = title->GetY() - 4;
-    const int textHeight = FontTextHeight_(24, SmallFontHeight_());
-    const int sliderX = layout.sliderX;
-    const int sliderW = bankmax::ControlsLayout::sliderWidth;
-    if (!layout.Fits(dlg->GetWidth(), textHeight)) {
-        LogWarn("宝屋最大化: 胜利条件标题右侧空间不足，未添加控件"); return;
-    }
-    H3DlgDef* box = H3DlgDef::Create(x, y, 32, 24, kBankCheckId_,
-        "ChkBlue.def", g_bank_maximize ? 1 : 0, 0, FALSE, FALSE);
-    H3DlgText* label = H3DlgText::Create(x + 35, y, 60, textHeight,
-        kBankLabel_, "smalfont.fnt", 1, kBankLabelId_, 4, 0);
-    H3DlgTransparentItem* hit = H3DlgTransparentItem::Create(x + 35, y, 60, textHeight, kBankHitId_);
-    H3DlgPcx16* slider = CreateBankSlider_(sliderX, y + 4, sliderW);
-    H3DlgPcx16* percentBg = CreateBankPercentBackground_(dlg, layout.percentX, y, textHeight);
-    H3DlgText* percentage = H3DlgText::Create(sliderX + sliderW + 3, y, 47, textHeight,
-        "100.0%", "smalfont.fnt", 1, kBankPercentId_, 4, 0);
-    if (!box || !label || !hit || !slider || !percentBg || !percentage) {
-        // Transfer successful partial allocations to the live dialog so its
-        // normal destructor frees them using each control's native vtable.
-        for (H3DlgItem* item : {static_cast<H3DlgItem*>(box), static_cast<H3DlgItem*>(label),
-            static_cast<H3DlgItem*>(hit), static_cast<H3DlgItem*>(slider),
-            static_cast<H3DlgItem*>(percentBg), static_cast<H3DlgItem*>(percentage)}) {
-            if (item) { dlg->AddItem(item); item->HideDeactivate(); }
-        }
-        LogError("宝屋最大化: 创建控件失败"); return;
-    }
-    // Reserve the left 90 pixels for the native title, leaving the separately
-    // painted victory body unchanged.
-    title->SetWidth(90);
-    dlg->AddItem(box); dlg->AddItem(hit); dlg->AddItem(label);
-    dlg->AddItem(slider); dlg->AddItem(percentBg); dlg->AddItem(percentage);
-    s_bank_controls_ready_ = true;
-    dlg->Redraw();
-    RefreshBankControls_(dlg);
-    LogInfo("宝屋最大化: 已添加控件 (%d,%d) 比例=%d/1000 勾选=%d", x, y, g_bank_ratio, g_bank_maximize);
-}
-static bool HandleBankControls_(H3SelectScenarioDialog* dlg, H3Msg* msg) {
-    if (!dlg || !msg || !s_bank_controls_ready_ || dlg->isCampaignMaybe || dlg->isLoadingMaybe) {
-        ResetBankDrag_(); return false;
-    }
-    if (s_bank_drag_dlg_ != dlg) { ResetBankDrag_(); s_bank_drag_dlg_ = dlg; }
-    H3DlgItem* slider = dlg->GetH3DlgItem(kBankSliderId_);
-    if (!BankOwnsItem_(dlg, slider)) { ResetBankDrag_(); return false; }
-    bankmax::SliderEvent event = bankmax::SliderEvent::Other;
-    if (msg->command == eMsgCommand::ITEM_COMMAND) {
-        if (msg->subtype == eMsgSubtype::LBUTTON_DOWN) event = bankmax::SliderEvent::Down;
-        else if (msg->subtype == eMsgSubtype::LBUTTON_CLICK) event = bankmax::SliderEvent::Click;
-    } else if (msg->command == eMsgCommand::MOUSE_OVER) event = bankmax::SliderEvent::Move;
-    else if (msg->command == eMsgCommand::LBUTTON_UP) event = bankmax::SliderEvent::Release;
-    const bankmax::SliderAction action = s_bank_gesture_.Handle(event,
-        PointInside_(slider, msg->GetX(), msg->GetY()),
-        (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0);
-    if (action == bankmax::SliderAction::Update) {
-        SetBankRatioFromMouse_(dlg, slider, msg->GetX()); return true;
-    }
-    if (action == bankmax::SliderAction::Consume) return true;
-    if (msg->command != eMsgCommand::ITEM_COMMAND || msg->subtype != eMsgSubtype::LBUTTON_DOWN) return false;
-    if (!PointInside_(dlg->GetH3DlgItem(kBankCheckId_), msg->GetX(), msg->GetY())
-        && !PointInside_(dlg->GetH3DlgItem(kBankHitId_), msg->GetX(), msg->GetY())) return false;
-    g_bank_maximize = !g_bank_maximize;
-    PersistBankSetting_("Enabled", g_bank_maximize);
-    RefreshBankControls_(dlg);
-    LogInfo("宝屋最大化: 勾选=%d 比例=%d/1000", g_bank_maximize, g_bank_ratio);
-    return true;
 }
 
 // Rejection sampling, fail-closed: never consume the game's RNG.

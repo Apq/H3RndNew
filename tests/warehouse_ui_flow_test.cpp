@@ -2,6 +2,10 @@
 #include "../modules/WarehouseUi.hpp"
 #include "../modules/WarehouseUiCatalog.hpp"
 #include "../modules/WarehouseUiCallback.hpp"
+// round-21 界面契约：本测试 TU 只含前向声明（无 H3API），Null 实现能编译
+// 即证明契约自足；生产接线指针由 hook_abi_test.cpp 对 H3RndNew.cpp 的整体
+// 包含提供定义，链接期解析。
+#include "../modules/UiPort.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -1262,6 +1266,47 @@ void RunWarehouseUiFlowTests_() {
     // 两回事，不能一起砍。
     Check(warehouseui::ButtonVisualState(false, false, true) == 2,
           "the bright hover texture still exists in the state table (unused by buttons)");
+
+    // ===== round-21 界面契约（modules/UiPort.hpp）=====
+    // Null 实现：全部走“原样放行”语义——不吞消息、不开窗、回调基线 0。
+    // 契约若加方法而 Null 未跟上，这里直接编译失败（防漏实现，参考
+    // H3BattleStore/H3Auto 的 UiPort 分离验收口径）。
+    class NullScenarioUi final : public IScenarioUi {
+    public:
+        void DialogCreated(h3::H3SelectScenarioDialog*, int) override {}
+        bool DialogMessage(h3::H3SelectScenarioDialog*, h3::H3Msg*) override { return false; }
+        void DialogMessageDone(h3::H3SelectScenarioDialog*, int) override {}
+    };
+    class NullSettingsUi final : public ISettingsUi {
+    public:
+        bool KeyMsg(bool, int, bool) override { return false; }
+    };
+    class NullWarehouseUi final : public IWarehouseUi {
+    public:
+        void Attach(h3::H3BaseDlg*, h3::H3Hero*, int, int) override {}
+        void Detach(h3::H3BaseDlg*) override {}
+        int Callback(void*, h3::H3Msg*) override { return 0; }
+    };
+    NullScenarioUi nullScenario;
+    NullSettingsUi nullSettings;
+    NullWarehouseUi nullWarehouse;
+    IScenarioUi* scenarioPort = &nullScenario;
+    ISettingsUi* settingsPort = &nullSettings;
+    IWarehouseUi* warehousePort = &nullWarehouse;
+    Check(!scenarioPort->DialogMessage(nullptr, nullptr)
+              && !settingsPort->KeyMsg(false, 87, false)
+              && warehousePort->Callback(nullptr, nullptr) == 0,
+          "ui port: null implementations keep native paths (no swallow, no open, callback base)");
+    scenarioPort->DialogCreated(nullptr, 0);
+    scenarioPort->DialogMessageDone(nullptr, 2);
+    settingsPort->KeyMsg(true, 87, true);
+    warehousePort->Attach(nullptr, nullptr, 0, 0);
+    warehousePort->Detach(nullptr);
+    Check(!scenarioPort->DialogMessage(nullptr, nullptr)
+              && !settingsPort->KeyMsg(false, 87, false),
+          "ui port: null lifecycle calls leave no state behind");
+    Check(g_uiScenario != nullptr && g_uiSettings != nullptr && g_uiWarehouse != nullptr,
+          "ui port: production wiring instantiates the HD implementations");
 
     if (g_failures != 0) {
         std::fprintf(stderr, "warehouse UI flow: %d/%d checks failed\n",
